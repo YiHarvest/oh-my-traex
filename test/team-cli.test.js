@@ -50,6 +50,21 @@ test('parses explicit workers for integration', () => {
   assert.equal(parsed.options.cwd, '/repo');
 });
 
+test('parses task listing and assignment', () => {
+  const listed = parseTeamArgs(['tasks', 'auth-team', '--json']);
+  assert.equal(listed.name, 'auth-team');
+  assert.equal(listed.options.json, true);
+  const assigned = parseTeamArgs(['assign', 'auth-team', 'worker-1', '-C', '/repo', 'add', 'tests']);
+  assert.equal(assigned.description, 'add tests');
+  assert.equal(assigned.options.cwd, '/repo');
+});
+
+test('parses team diagnose command', () => {
+  const parsed = parseTeamArgs(['diagnose', 'auth-team', '-C', '/repo']);
+  assert.equal(parsed.name, 'auth-team');
+  assert.equal(parsed.options.cwd, '/repo');
+});
+
 test('rejects unsafe team worker counts', () => {
   assert.throws(() => parseTeamArgs(['7:executor', 'task']), /1 to 6/);
 });

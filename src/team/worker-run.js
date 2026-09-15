@@ -75,7 +75,8 @@ while (true) {
     continue;
   }
   updateMailboxMessage(stateDir, workerName, message.id, { status: 'working', started_at: new Date().toISOString() });
-  updateWorkerState(stateDir, workerName, { status: 'working', current_message_id: message.id });
+  updateWorkerState(stateDir, workerName, { status: 'working', current_message_id: message.id, current_task_id: message.task_id });
+  if (message.task_id) updateTaskState(stateDir, message.task_id, { status: 'in_progress', started_at: new Date().toISOString() });
   const followupPath = join(stateDir, 'workers', workerName, `followup-${message.id}.md`);
   const followupArgs = ['exec', 'resume', '--json', '--output-last-message', followupPath];
   if (model) followupArgs.push('--model', model);
@@ -101,9 +102,19 @@ while (true) {
     commit: followupCommit.status === 0 ? followupCommit.stdout.trim() : null,
     error: followupStatus === 'failed' ? `follow-up exited ${followupExit}` : null,
   });
+  if (message.task_id) {
+    updateTaskState(stateDir, message.task_id, {
+      status: followupStatus,
+      completed_at: new Date().toISOString(),
+      commit: followupCommit.status === 0 ? followupCommit.stdout.trim() : null,
+      result_path: followupPath,
+      error: followupStatus === 'failed' ? `follow-up exited ${followupExit}` : null,
+    });
+  }
   updateWorkerState(stateDir, workerName, {
     status: followupStatus,
     current_message_id: null,
+    current_task_id: null,
     commit: followupCommit.status === 0 ? followupCommit.stdout.trim() : null,
     completed_at: new Date().toISOString(),
   });

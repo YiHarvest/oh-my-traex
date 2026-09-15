@@ -40,6 +40,9 @@ node src/cli.js team await auth-team
 node src/cli.js team resume auth-team
 node src/cli.js team send auth-team worker-1 "Add an edge-case test and commit it"
 node src/cli.js team broadcast auth-team "Re-run verification and report blockers"
+node src/cli.js team tasks auth-team
+node src/cli.js team assign auth-team worker-1 "Implement another bounded change"
+node src/cli.js team diagnose auth-team
 node src/cli.js team integrate auth-team worker-1 worker-2
 node src/cli.js team stop auth-team
 ```
@@ -70,6 +73,9 @@ otx run "Your task"
 | `otx team send <name> <worker> <message>` | Queue a durable follow-up for one worker session |
 | `otx team broadcast <name> <message>` | Queue the same follow-up for all workers |
 | `otx team mailbox <name> <worker>` | Inspect persisted follow-up delivery/results |
+| `otx team tasks <name>` | List the durable task ledger |
+| `otx team assign <name> <worker> <task>` | Persist and dispatch a new task to a long-lived worker |
+| `otx team diagnose <name>` | Report pane, heartbeat, child PID, task, mailbox, and worktree health |
 | `otx team integrate <name> [worker ...]` | Validate and cherry-pick completed worker commits |
 | `otx team stop <name>` | Safely stop panes after validating ownership |
 

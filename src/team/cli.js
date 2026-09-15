@@ -1,13 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { awaitTeam, broadcastTeamMessage, integrateTeam, readTeamMailbox, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
+import { assignTeamTask, awaitTeam, broadcastTeamMessage, diagnoseTeam, integrateTeam, listTasks, readTeamMailbox, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
 import { listTeamStates } from './state.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 
 export function parseTeamArgs(args) {
   const tokens = [...args];
-  const subcommand = ['list', 'status', 'await', 'resume', 'stop', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
+  const subcommand = ['list', 'tasks', 'assign', 'diagnose', 'status', 'await', 'resume', 'stop', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
   const options = { workers: 3, cwd: process.cwd(), timeoutMs: 3_600_000 };
   if (subcommand === 'list') {
     parseOptions(tokens, options);
@@ -19,6 +19,13 @@ export function parseTeamArgs(args) {
     const message = parseMessageAndOptions(tokens, options);
     if (!name || !worker || !message) throw new Error('Usage: otx team send <team> <worker> "message"');
     return { subcommand, name, worker, message, options };
+  }
+  if (subcommand === 'assign') {
+    const name = tokens.shift();
+    const worker = tokens.shift();
+    const description = parseMessageAndOptions(tokens, options);
+    if (!name || !worker || !description) throw new Error('Usage: otx team assign <team> <worker> "task"');
+    return { subcommand, name, worker, description, options };
   }
   if (subcommand === 'broadcast') {
     const name = tokens.shift();
@@ -32,6 +39,18 @@ export function parseTeamArgs(args) {
     parseOptions(tokens, options);
     if (!name || !worker) throw new Error('Usage: otx team mailbox <team> <worker>');
     return { subcommand, name, worker, options };
+  }
+  if (subcommand === 'tasks') {
+    const name = tokens.shift();
+    parseOptions(tokens, options);
+    if (!name) throw new Error('Usage: otx team tasks <team>');
+    return { subcommand, name, options };
+  }
+  if (subcommand === 'diagnose') {
+    const name = tokens.shift();
+    parseOptions(tokens, options);
+    if (!name) throw new Error('Usage: otx team diagnose <team>');
+    return { subcommand, name, options };
   }
   if (subcommand === 'integrate') {
     const name = tokens.shift();
@@ -86,12 +105,24 @@ export function runTeamCommand(args) {
     process.stdout.write(`${JSON.stringify(sendTeamMessage(cwd, parsed.name, parsed.worker, parsed.message), null, 2)}\n`);
     return 0;
   }
+  if (parsed.subcommand === 'assign') {
+    process.stdout.write(`${JSON.stringify(assignTeamTask(cwd, parsed.name, parsed.worker, parsed.description), null, 2)}\n`);
+    return 0;
+  }
   if (parsed.subcommand === 'broadcast') {
     process.stdout.write(`${JSON.stringify(broadcastTeamMessage(cwd, parsed.name, parsed.message), null, 2)}\n`);
     return 0;
   }
   if (parsed.subcommand === 'mailbox') {
     process.stdout.write(`${JSON.stringify(readTeamMailbox(cwd, parsed.name, parsed.worker), null, 2)}\n`);
+    return 0;
+  }
+  if (parsed.subcommand === 'tasks') {
+    process.stdout.write(`${JSON.stringify(listTasks(cwd, parsed.name), null, 2)}\n`);
+    return 0;
+  }
+  if (parsed.subcommand === 'diagnose') {
+    process.stdout.write(`${JSON.stringify(diagnoseTeam(cwd, parsed.name), null, 2)}\n`);
     return 0;
   }
   if (parsed.subcommand === 'integrate') {

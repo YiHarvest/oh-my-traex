@@ -81,7 +81,7 @@ export function readTeamState(cwd, name) {
   const stateDir = teamStateDir(cwd, name);
   const config = readJson(join(stateDir, 'config.json'));
   const workers = config.workers.map((workerName) => readJson(workerStatePath(stateDir, workerName)));
-  const tasks = workers.map((worker) => readJson(taskStatePath(stateDir, String(worker.index))));
+  const tasks = listTeamTasks(stateDir);
   return { stateDir, config, workers, tasks };
 }
 
@@ -111,15 +111,51 @@ export function updateTaskState(stateDir, taskId, updates) {
   return next;
 }
 
+export function createTeamTask(stateDir, input) {
+  const tasksDir = join(stateDir, 'tasks');
+  const ids = readdirSync(tasksDir)
+    .map((name) => name.match(/^task-(\d+)\.json$/)?.[1])
+    .filter(Boolean)
+    .map(Number);
+  const id = String(ids.length === 0 ? 1 : Math.max(...ids) + 1);
+  const task = {
+    id,
+    subject: input.subject,
+    description: input.description,
+    owner: input.owner,
+    role: input.role,
+    requires_commit: input.requires_commit,
+    status: 'pending',
+    created_at: new Date().toISOString(),
+  };
+  writeJsonAtomic(taskStatePath(stateDir, id), task);
+  return task;
+}
+
+export function listTeamTasks(stateDir) {
+  const tasksDir = join(stateDir, 'tasks');
+  if (!existsSync(tasksDir)) return [];
+  return readdirSync(tasksDir)
+    .filter((name) => /^task-\d+\.json$/.test(name))
+    .map((name) => readJson(join(tasksDir, name)))
+    .sort((left, right) => Number(left.id) - Number(right.id));
+}
+
 export function enqueueMailboxMessage(stateDir, workerName, message) {
   const created = {
     id: randomUUID(),
     body: message,
+    task_id: null,
     status: 'pending',
     created_at: new Date().toISOString(),
   };
   writeJsonAtomic(mailboxMessagePath(stateDir, workerName, created.id), created);
   return created;
+}
+
+export function enqueueTaskMessage(stateDir, workerName, taskId, message) {
+  const created = enqueueMailboxMessage(stateDir, workerName, message);
+  return updateMailboxMessage(stateDir, workerName, created.id, { task_id: taskId });
 }
 
 export function readMailbox(stateDir, workerName) {

@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { enqueueMailboxMessage, initTeamState, readMailbox, readTeamState, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState } from '../src/team/state.js';
+import { createTeamTask, enqueueMailboxMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState } from '../src/team/state.js';
 
 test('persists team and worker state under the Git common directory', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-state-'));
@@ -46,6 +46,20 @@ test('stores mailbox messages as durable independently updated records', () => {
     assert.equal(mailbox.messages.find((message) => message.id === first.id).status, 'completed');
     assert.equal(mailbox.messages.find((message) => message.id === second.id).status, 'pending');
     assert.notEqual(first.id, second.id);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('allocates monotonic durable task IDs', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-tasks-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const created = createTeamTask(stateDir, { subject: 'next', description: 'next', owner: 'worker-1', role: 'explorer', requires_commit: false });
+    assert.equal(created.id, '2');
+    assert.deepEqual(listTeamTasks(stateDir).map((task) => task.id), ['1', '2']);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

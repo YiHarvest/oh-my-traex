@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { buildLeaderPrompt, buildWorkerPrompt } from './prompt.js';
-import { assertTeamDoesNotExist, defaultTeamName, enqueueMailboxMessage, initTeamState, readMailbox, readTeamState, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState } from './state.js';
+import { assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState } from './state.js';
 import { assertCleanWorkspace, createWorkerWorktrees, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
 
 export function startTeam({ cwd, task, workerCount, model, teamName, baseRole, env = process.env, run = spawnSync }) {
@@ -91,6 +91,16 @@ export function teamStatus(cwd, name, run = spawnSync) {
   const state = readTeamState(cwd, name);
   state.workers = state.workers.map((worker) => {
     const paneAlive = paneOwnedBy(run, worker, state.config);
+    const heartbeatAgeMs = worker.heartbeat_at ? Math.max(0, Date.now() - Date.parse(worker.heartbeat_at)) : null;
+    const health = worker.status === 'completed'
+      ? 'completed'
+      : worker.status === 'failed' || worker.status === 'cancelled'
+        ? worker.status
+        : !paneAlive
+          ? 'dead'
+          : heartbeatAgeMs !== null && heartbeatAgeMs > 30_000
+            ? 'stale'
+            : 'healthy';
     const startupGrace = worker.status === 'starting'
       && Date.now() - Date.parse(worker.updated_at || state.config.created_at) < 10_000;
     if (!paneAlive && !startupGrace && ['starting', 'queued', 'working'].includes(worker.status)) {
@@ -106,9 +116,15 @@ export function teamStatus(cwd, name, run = spawnSync) {
         error: failed.error,
         completed_at: failed.completed_at,
       });
-      return failed;
+      return { ...failed, health: 'dead', heartbeat_age_ms: heartbeatAgeMs };
     }
-    return { ...worker, pane_alive: paneAlive, dirty: worktreeStatus(worker.worktree_path) !== '' };
+    return {
+      ...worker,
+      pane_alive: paneAlive,
+      dirty: worktreeStatus(worker.worktree_path) !== '',
+      health,
+      heartbeat_age_ms: heartbeatAgeMs,
+    };
   });
   if (state.config.status === 'running' && state.workers.every((worker) => ['completed', 'failed'].includes(worker.status))) {
     state.config = updateTeamConfig(state.stateDir, {
@@ -162,7 +178,7 @@ export function sendTeamMessage(cwd, name, workerName, message) {
   if (!worker) throw new Error(`worker not found: ${workerName}`);
   if (!worker.pane_alive) throw new Error(`worker is not running: ${workerName}`);
   const created = enqueueMailboxMessage(state.stateDir, workerName, message);
-  updateWorkerState(state.stateDir, workerName, { status: 'queued', current_message_id: created.id });
+  updateWorkerState(state.stateDir, workerName, { status: 'queued', current_message_id: created.id, integration: null });
   updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
   return created;
 }
@@ -173,7 +189,7 @@ export function broadcastTeamMessage(cwd, name, message) {
   if (workers.length === 0) throw new Error(`team has no running workers: ${name}`);
   const messages = workers.map((worker) => {
     const created = enqueueMailboxMessage(state.stateDir, worker.name, message);
-    updateWorkerState(state.stateDir, worker.name, { status: 'queued', current_message_id: created.id });
+    updateWorkerState(state.stateDir, worker.name, { status: 'queued', current_message_id: created.id, integration: null });
     return { worker: worker.name, message: created };
   });
   updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
@@ -186,6 +202,57 @@ export function readTeamMailbox(cwd, name, workerName) {
     throw new Error(`worker not found: ${workerName}`);
   }
   return readMailbox(state.stateDir, workerName);
+}
+
+export function listTasks(cwd, name) {
+  const state = readTeamState(cwd, name);
+  return listTeamTasks(state.stateDir);
+}
+
+export function diagnoseTeam(cwd, name) {
+  const state = teamStatus(cwd, name);
+  return {
+    team: state.config.name,
+    status: state.config.status,
+    workers: state.workers.map((worker) => ({
+      name: worker.name,
+      role: worker.role,
+      status: worker.status,
+      health: worker.health,
+      pane_alive: worker.pane_alive,
+      heartbeat_age_ms: worker.heartbeat_age_ms,
+      child_pid: worker.child_pid ?? null,
+      current_task_id: worker.current_task_id ?? null,
+      current_message_id: worker.current_message_id ?? null,
+      worktree_dirty: worker.dirty,
+      error: worker.error ?? null,
+    })),
+  };
+}
+
+export function assignTeamTask(cwd, name, workerName, description) {
+  const state = teamStatus(cwd, name);
+  const worker = state.workers.find((candidate) => candidate.name === workerName);
+  if (!worker) throw new Error(`worker not found: ${workerName}`);
+  if (!worker.pane_alive) throw new Error(`worker is not running: ${workerName}`);
+  if (['queued', 'working'].includes(worker.status)) throw new Error(`worker is busy: ${workerName}`);
+  const task = createTeamTask(state.stateDir, {
+    subject: description,
+    description,
+    owner: workerName,
+    role: worker.role,
+    requires_commit: worker.requires_commit,
+  });
+  const body = `New OTX team task ${task.id}: ${description} Follow your existing worker contract, verify the result, and ${worker.requires_commit ? 'commit all intended changes.' : 'avoid changes unless essential.'}`;
+  const message = enqueueTaskMessage(state.stateDir, workerName, task.id, body);
+  updateWorkerState(state.stateDir, workerName, {
+    status: 'queued',
+    current_message_id: message.id,
+    current_task_id: task.id,
+    integration: null,
+  });
+  updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
+  return { task, message };
 }
 
 export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
@@ -204,7 +271,8 @@ export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
   });
   const results = [];
   for (const worker of selected) {
-    if (['integrated', 'already_integrated'].includes(worker.integration?.status)) {
+    if (['integrated', 'already_integrated'].includes(worker.integration?.status)
+      && worker.integration?.commit === worker.commit) {
       results.push({ ...worker.integration, status: 'already_integrated' });
       continue;
     }
@@ -215,7 +283,8 @@ export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
     if (branchHead.status !== 0 || branchHead.stdout.trim() !== worker.commit) {
       throw new Error(`worker branch head does not match recorded commit: ${worker.name}`);
     }
-    const range = run('git', ['rev-list', '--reverse', `${worker.base_commit}..${worker.commit}`], { cwd: state.config.cwd, encoding: 'utf8' });
+    const integrationBase = worker.integration?.commit || worker.base_commit;
+    const range = run('git', ['rev-list', '--reverse', `${integrationBase}..${worker.commit}`], { cwd: state.config.cwd, encoding: 'utf8' });
     if (range.status !== 0) throw new Error(`worker commit range is invalid: ${worker.name}`);
     const sourceCommits = range.stdout.trim().split('\n').filter(Boolean);
     if (sourceCommits.length === 0) throw new Error(`worker has no commits beyond its base: ${worker.name}`);
