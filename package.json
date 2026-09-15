@@ -1,0 +1,24 @@
+{
+  "name": "oh-my-traex",
+  "version": "0.1.0",
+  "description": "Lightweight native multi-agent orchestration for TraeX",
+  "type": "module",
+  "bin": {
+    "otx": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "doctor": "node src/cli.js doctor",
+    "prompt": "node src/cli.js prompt"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "traex",
+    "traecode",
+    "multi-agent",
+    "orchestration"
+  ],
+  "license": "MIT"
+}
