@@ -1,7 +1,7 @@
 {
   "name": "oh-my-traex",
-  "version": "0.1.0",
-  "description": "Lightweight native multi-agent orchestration for TraeX",
+  "version": "0.2.0",
+  "description": "Native and durable multi-agent orchestration for TraeX",
   "type": "module",
   "bin": {
     "otx": "src/cli.js"
@@ -14,6 +14,11 @@
   "engines": {
     "node": ">=22"
   },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
   "keywords": [
     "traex",
     "traecode",

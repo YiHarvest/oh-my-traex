@@ -7,12 +7,16 @@ import { parseArgs } from './args.js';
 import { buildOrchestratorPrompt } from './prompt.js';
 import { roleCatalog } from './roles.js';
 import { scheduleDashboardPrompt, startDashboardRuntime, startDashboardUi, stopDashboardRuntime } from './dashboard.js';
+import { runTeamCommand } from './team/cli.js';
 
 const HELP = `oh-my-traex (otx) - TraeX-native multi-agent orchestration
 
 Usage:
   otx run [options] "task"
   otx prompt [options] "task"
+  otx team [N:role] [options] "task"
+  otx team list
+  otx team status|await|resume|stop <team-name>
   otx roles
   otx doctor
 
@@ -32,8 +36,9 @@ Examples:
   otx run -n 3 --mode conservative "Review this repository for security issues"
   otx prompt "Refactor the parser without changing behavior"`;
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   try {
+    if (argv[0] === 'team') return await runTeamCommand(argv.slice(1));
     const { command, task, options } = parseArgs(argv);
     if (options.help || command === 'help') return print(HELP);
     if (command === 'roles') return print(roleCatalog());
@@ -122,4 +127,6 @@ function print(value) {
   return 0;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) process.exitCode = main();
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().then((code) => { process.exitCode = code; });
+}

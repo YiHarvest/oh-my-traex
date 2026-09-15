@@ -1,8 +1,10 @@
 # oh-my-traex
 
-`oh-my-traex` is a lightweight multi-agent orchestration layer for TraeX. It is inspired by the role routing and lead/worker discipline in `oh-my-codex`, but delegates process management to TraeX's native, stable `multi_agent` runtime.
+`oh-my-traex` provides two multi-agent execution surfaces for TraeX: a lightweight
+native-child mode and a durable independent-process team runtime inspired by
+`oh-my-codex`.
 
-The first release focuses on a small, auditable contract:
+The native `otx run` surface follows a small, auditable contract:
 
 - a lead agent owns decomposition, integration, verification, and the final answer;
 - at most 1-6 child agents run concurrently;
@@ -31,6 +33,12 @@ node src/cli.js run "Implement login rate limiting and tests"
 node src/cli.js run --ui dashboard "Implement login rate limiting and tests"
 node src/cli.js run -n 3 --mode conservative "Audit the authorization layer"
 node src/cli.js prompt "Refactor the parser without changing behavior"
+node src/cli.js team 3:executor --name auth-team "Implement authentication and tests"
+node src/cli.js team list
+node src/cli.js team status auth-team
+node src/cli.js team await auth-team
+node src/cli.js team resume auth-team
+node src/cli.js team stop auth-team
 ```
 
 To make `otx` available locally while developing:
@@ -51,6 +59,12 @@ otx run "Your task"
 | `otx prompt <task>` | Print the generated lead prompt for inspection or reuse |
 | `otx roles` | List the built-in role mappings |
 | `otx doctor` | Verify Node, TraeX, and native multi-agent features |
+| `otx team [N:role] <task>` | Start independent TraeX workers in tmux and dedicated Git worktrees |
+| `otx team list` | List persisted teams in the current Git repository |
+| `otx team status <name>` | Show durable worker, pane, worktree, commit, and result state |
+| `otx team await <name>` | Wait until every worker reaches a terminal state |
+| `otx team resume <name>` | Resume the persisted TraeX leader session |
+| `otx team stop <name>` | Safely stop panes after validating ownership |
 
 Useful options include `--workers 1..6`, `--mode conservative|balanced|aggressive`, `--model`, `--cwd`, `--read-only`, `--json`, and `--dry-run`.
 
@@ -64,9 +78,27 @@ The dashboard mode also starts an isolated local app-server supervisor. When the
 lead spawns a native child agent, the supervisor discovers its thread and opens
 a read-only tmux pane named with the child's nickname and role.
 
+## Durable team runtime
+
+`otx team` is the heavier execution surface for changes that need independent
+workers. Each first-level worker receives its own TraeX process, tmux pane,
+session ID, branch, and Git worktree under `../<repo>.otx-worktrees/<team>/`.
+Team metadata and worker results are stored under the repository's Git common
+directory at `.git/otx/team/<team>/`, so they remain available from every
+worktree without dirtying the project checkout.
+
+The first release uses static role lanes and requires a clean leader checkout.
+Workers must finish with a new commit and clean worktree. The leader reviews and
+cherry-picks accepted commits; `team stop` closes only panes whose team, worker,
+run ID, and original pane PID still match the persisted ownership record.
+
 ## Why this shape
 
-`oh-my-codex` contains its own mature team runtime, durable state, tmux integration, hooks, worktrees, and delivery protocol. TraeX already exposes native child-agent collaboration, so this project starts with the orchestration policy that adds value and avoids duplicating lifecycle machinery. Durable state, resumable team runs, richer role configuration, and a TraeX plugin can be layered on after the native MVP is validated.
+`otx run` uses TraeX native children for inexpensive in-session fanout. `otx team`
+uses independent TraeX processes and worktrees for durable, coarse-grained
+parallel execution. A team worker may still use native TraeX children internally,
+giving OTX the same two-level execution model that makes OMX useful: durable
+first-level workers plus lightweight nested subagents.
 
 ## Development
 
