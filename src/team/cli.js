@@ -1,13 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { awaitTeam, broadcastTeamMessage, readTeamMailbox, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
+import { awaitTeam, broadcastTeamMessage, integrateTeam, readTeamMailbox, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
 import { listTeamStates } from './state.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 
 export function parseTeamArgs(args) {
   const tokens = [...args];
-  const subcommand = ['list', 'status', 'await', 'resume', 'stop', 'send', 'broadcast', 'mailbox'].includes(tokens[0]) ? tokens.shift() : 'start';
+  const subcommand = ['list', 'status', 'await', 'resume', 'stop', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
   const options = { workers: 3, cwd: process.cwd(), timeoutMs: 3_600_000 };
   if (subcommand === 'list') {
     parseOptions(tokens, options);
@@ -32,6 +32,14 @@ export function parseTeamArgs(args) {
     parseOptions(tokens, options);
     if (!name || !worker) throw new Error('Usage: otx team mailbox <team> <worker>');
     return { subcommand, name, worker, options };
+  }
+  if (subcommand === 'integrate') {
+    const name = tokens.shift();
+    if (!name) throw new Error('Usage: otx team integrate <team> [worker ...]');
+    const workers = [];
+    while (tokens.length > 0 && !tokens[0].startsWith('-')) workers.push(tokens.shift());
+    parseOptions(tokens, options);
+    return { subcommand, name, workers, options };
   }
   if (subcommand !== 'start') {
     const name = tokens.shift();
@@ -85,6 +93,11 @@ export function runTeamCommand(args) {
   if (parsed.subcommand === 'mailbox') {
     process.stdout.write(`${JSON.stringify(readTeamMailbox(cwd, parsed.name, parsed.worker), null, 2)}\n`);
     return 0;
+  }
+  if (parsed.subcommand === 'integrate') {
+    const result = integrateTeam(cwd, parsed.name, parsed.workers);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result.ok ? 0 : 1;
   }
   if (parsed.subcommand === 'status') return printStatus(teamStatus(cwd, parsed.name), parsed.options.json);
   if (parsed.subcommand === 'stop') {

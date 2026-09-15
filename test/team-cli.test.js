@@ -44,6 +44,12 @@ test('parses mailbox cwd option', () => {
   assert.equal(parsed.options.cwd, '/repo');
 });
 
+test('parses explicit workers for integration', () => {
+  const parsed = parseTeamArgs(['integrate', 'auth-team', 'worker-1', 'worker-2', '-C', '/repo']);
+  assert.deepEqual(parsed.workers, ['worker-1', 'worker-2']);
+  assert.equal(parsed.options.cwd, '/repo');
+});
+
 test('rejects unsafe team worker counts', () => {
   assert.throws(() => parseTeamArgs(['7:executor', 'task']), /1 to 6/);
 });

@@ -40,6 +40,7 @@ node src/cli.js team await auth-team
 node src/cli.js team resume auth-team
 node src/cli.js team send auth-team worker-1 "Add an edge-case test and commit it"
 node src/cli.js team broadcast auth-team "Re-run verification and report blockers"
+node src/cli.js team integrate auth-team worker-1 worker-2
 node src/cli.js team stop auth-team
 ```
 
@@ -69,6 +70,7 @@ otx run "Your task"
 | `otx team send <name> <worker> <message>` | Queue a durable follow-up for one worker session |
 | `otx team broadcast <name> <message>` | Queue the same follow-up for all workers |
 | `otx team mailbox <name> <worker>` | Inspect persisted follow-up delivery/results |
+| `otx team integrate <name> [worker ...]` | Validate and cherry-pick completed worker commits |
 | `otx team stop <name>` | Safely stop panes after validating ownership |
 
 Useful options include `--workers 1..6`, `--mode conservative|balanced|aggressive`, `--model`, `--cwd`, `--read-only`, `--json`, and `--dry-run`.

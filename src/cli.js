@@ -19,6 +19,7 @@ Usage:
   otx team status|await|resume|stop <team-name>
   otx team send <team-name> <worker> "message"
   otx team broadcast <team-name> "message"
+  otx team integrate <team-name> [worker ...]
   otx roles
   otx doctor
 

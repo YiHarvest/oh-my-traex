@@ -93,7 +93,7 @@ export function teamStatus(cwd, name, run = spawnSync) {
     const paneAlive = paneOwnedBy(run, worker, state.config);
     const startupGrace = worker.status === 'starting'
       && Date.now() - Date.parse(worker.updated_at || state.config.created_at) < 10_000;
-    if (!paneAlive && !startupGrace && ['starting', 'working'].includes(worker.status)) {
+    if (!paneAlive && !startupGrace && ['starting', 'queued', 'working'].includes(worker.status)) {
       const failed = updateWorkerState(state.stateDir, worker.name, {
         status: 'failed',
         error: 'worker pane exited before recording a terminal result',
@@ -186,6 +186,73 @@ export function readTeamMailbox(cwd, name, workerName) {
     throw new Error(`worker not found: ${workerName}`);
   }
   return readMailbox(state.stateDir, workerName);
+}
+
+export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
+  const state = teamStatus(cwd, name, run);
+  if (state.config.status === 'running') throw new Error('team still has running or queued work; await completion before integration.');
+  const leaderStatus = run('git', ['status', '--porcelain'], { cwd: state.config.cwd, encoding: 'utf8' });
+  if (leaderStatus.status !== 0) throw new Error(String(leaderStatus.stderr || 'failed to inspect leader workspace').trim());
+  if (leaderStatus.stdout.trim()) throw new Error('leader workspace must be clean before integration.');
+  const requested = workerNames.length > 0
+    ? workerNames
+    : state.workers.filter((worker) => worker.requires_commit).map((worker) => worker.name);
+  const selected = requested.map((workerName) => {
+    const worker = state.workers.find((candidate) => candidate.name === workerName);
+    if (!worker) throw new Error(`worker not found: ${workerName}`);
+    return worker;
+  });
+  const results = [];
+  for (const worker of selected) {
+    if (['integrated', 'already_integrated'].includes(worker.integration?.status)) {
+      results.push({ ...worker.integration, status: 'already_integrated' });
+      continue;
+    }
+    if (worker.status !== 'completed') throw new Error(`worker is not completed: ${worker.name}`);
+    if (worker.dirty) throw new Error(`worker worktree is dirty: ${worker.name}`);
+    if (!worker.commit || worker.commit === worker.base_commit) throw new Error(`worker has no new commit: ${worker.name}`);
+    const branchHead = run('git', ['rev-parse', worker.branch], { cwd: state.config.cwd, encoding: 'utf8' });
+    if (branchHead.status !== 0 || branchHead.stdout.trim() !== worker.commit) {
+      throw new Error(`worker branch head does not match recorded commit: ${worker.name}`);
+    }
+    const range = run('git', ['rev-list', '--reverse', `${worker.base_commit}..${worker.commit}`], { cwd: state.config.cwd, encoding: 'utf8' });
+    if (range.status !== 0) throw new Error(`worker commit range is invalid: ${worker.name}`);
+    const sourceCommits = range.stdout.trim().split('\n').filter(Boolean);
+    if (sourceCommits.length === 0) throw new Error(`worker has no commits beyond its base: ${worker.name}`);
+    const alreadyIntegrated = run('git', ['merge-base', '--is-ancestor', worker.commit, 'HEAD'], { cwd: state.config.cwd, encoding: 'utf8' });
+    if (alreadyIntegrated.status === 0) {
+      const record = { worker: worker.name, commit: worker.commit, source_commits: sourceCommits, status: 'already_integrated' };
+      updateWorkerState(state.stateDir, worker.name, { integration: record });
+      results.push(record);
+      continue;
+    }
+    const cherryPick = run('git', ['cherry-pick', ...sourceCommits], { cwd: state.config.cwd, encoding: 'utf8' });
+    if (cherryPick.status !== 0) {
+      run('git', ['cherry-pick', '--abort'], { cwd: state.config.cwd, encoding: 'utf8' });
+      const record = {
+        worker: worker.name,
+        commit: worker.commit,
+        source_commits: sourceCommits,
+        status: 'conflict',
+        error: String(cherryPick.stderr || cherryPick.stdout || 'cherry-pick failed').trim(),
+      };
+      updateWorkerState(state.stateDir, worker.name, { integration: record });
+      updateTeamConfig(state.stateDir, { status: 'integration_failed', integration_error: record });
+      return { ok: false, results: [...results, record] };
+    }
+    const integratedHead = run('git', ['rev-parse', 'HEAD'], { cwd: state.config.cwd, encoding: 'utf8' });
+    const record = {
+      worker: worker.name,
+      commit: worker.commit,
+      source_commits: sourceCommits,
+      integrated_commit: integratedHead.stdout.trim(),
+      status: 'integrated',
+    };
+    updateWorkerState(state.stateDir, worker.name, { integration: record });
+    results.push(record);
+  }
+  updateTeamConfig(state.stateDir, { status: 'integrated', integrated_at: new Date().toISOString(), integration_results: results });
+  return { ok: true, results };
 }
 
 export function resumeTeam(cwd, name, { model, env = process.env, run = spawnSync } = {}) {
