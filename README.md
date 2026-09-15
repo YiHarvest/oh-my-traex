@@ -42,6 +42,7 @@ node src/cli.js team send auth-team worker-1 "Add an edge-case test and commit i
 node src/cli.js team broadcast auth-team "Re-run verification and report blockers"
 node src/cli.js team tasks auth-team
 node src/cli.js team assign auth-team worker-1 "Implement another bounded change"
+node src/cli.js team assign auth-team worker-2 --depends-on 2 "Verify task 2"
 node src/cli.js team diagnose auth-team
 node src/cli.js team add-worker auth-team verifier "Verify the integrated behavior"
 node src/cli.js team remove-worker auth-team worker-4
@@ -115,6 +116,16 @@ Long-lived workers can receive durable messages or explicit follow-up tasks on
 their original TraeX session. Team membership can grow or shrink at runtime;
 worker indices are monotonic and never reused within a team. Cleanup and removal
 preserve dirty or unintegrated worktrees instead of deleting recoverable work.
+
+Assigned tasks may declare dependencies with `--depends-on`. Workers claim a
+ready task under a cross-process lock and receive a lease token; completion is
+accepted only from the worker holding that token. Blocked tasks stay queued
+until all dependency task records reach `completed`.
+
+Task records carry monotonic versions, claim leases, dependency and blocker
+fields, result paths, commits, and errors. Expired leases can be reclaimed;
+workers renew active leases from their heartbeat loop. A blocked item never
+prevents the same long-lived worker from processing later ready messages.
 
 ## Why this shape
 

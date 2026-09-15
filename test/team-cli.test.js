@@ -54,8 +54,9 @@ test('parses task listing and assignment', () => {
   const listed = parseTeamArgs(['tasks', 'auth-team', '--json']);
   assert.equal(listed.name, 'auth-team');
   assert.equal(listed.options.json, true);
-  const assigned = parseTeamArgs(['assign', 'auth-team', 'worker-1', '-C', '/repo', 'add', 'tests']);
+  const assigned = parseTeamArgs(['assign', 'auth-team', 'worker-1', '-C', '/repo', '--depends-on', '1,2', 'add', 'tests']);
   assert.equal(assigned.description, 'add tests');
+  assert.deepEqual(assigned.dependsOn, ['1', '2']);
   assert.equal(assigned.options.cwd, '/repo');
 });
 

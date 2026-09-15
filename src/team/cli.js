@@ -13,7 +13,7 @@ Usage:
   otx team tasks|diagnose <name> [-C DIR]
   otx team add-worker <name> <role> [-C DIR] -- "assignment"
   otx team remove-worker <name> <worker> [-C DIR]
-  otx team assign <name> <worker> [-C DIR] -- "task"
+  otx team assign <name> <worker> [--depends-on 1,2] [-C DIR] -- "task"
   otx team send <name> <worker> [-C DIR] -- "message"
   otx team broadcast <name> [-C DIR] -- "message"
   otx team mailbox <name> <worker> [-C DIR]
@@ -37,9 +37,9 @@ export function parseTeamArgs(args) {
   if (subcommand === 'assign') {
     const name = tokens.shift();
     const worker = tokens.shift();
-    const description = parseMessageAndOptions(tokens, options);
+    const description = parseAssignmentAndOptions(tokens, options);
     if (!name || !worker || !description) throw new Error('Usage: otx team assign <team> <worker> "task"');
-    return { subcommand, name, worker, description, options };
+    return { subcommand, name, worker, description, dependsOn: options.dependsOn || [], options };
   }
   if (subcommand === 'add-worker') {
     const name = tokens.shift();
@@ -139,7 +139,7 @@ export function runTeamCommand(args) {
     return 0;
   }
   if (parsed.subcommand === 'assign') {
-    process.stdout.write(`${JSON.stringify(assignTeamTask(cwd, parsed.name, parsed.worker, parsed.description), null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(assignTeamTask(cwd, parsed.name, parsed.worker, parsed.description, parsed.dependsOn), null, 2)}\n`);
     return 0;
   }
   if (parsed.subcommand === 'add-worker') {
@@ -240,6 +240,28 @@ function parseMessageAndOptions(tokens, options) {
     else messageParts.push(token);
   }
   return messageParts.join(' ').trim();
+}
+
+function parseAssignmentAndOptions(tokens, options) {
+  const messageParts = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === '--') {
+      messageParts.push(...tokens.slice(index + 1));
+      break;
+    }
+    if (token === '--cwd' || token === '-C') options.cwd = requireValue(tokens, ++index, token);
+    else if (token === '--depends-on') options.dependsOn = parseDependencyList(requireValue(tokens, ++index, token));
+    else if (token.startsWith('--depends-on=')) options.dependsOn = parseDependencyList(token.slice(13));
+    else messageParts.push(token);
+  }
+  return messageParts.join(' ').trim();
+}
+
+function parseDependencyList(value) {
+  const dependencies = value.split(',').map((entry) => entry.trim()).filter(Boolean);
+  if (dependencies.some((entry) => !/^\d+$/.test(entry))) throw new Error('--depends-on must contain comma-separated task IDs.');
+  return [...new Set(dependencies)];
 }
 
 function printStatus(state, json = false) {

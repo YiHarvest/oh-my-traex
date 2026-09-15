@@ -4,18 +4,21 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { readMailbox, updateMailboxMessage, updateTaskState, updateWorkerState } from './state.js';
+import { claimTeamTask, completeClaimedTask, readMailbox, renewTaskClaim, updateMailboxMessage, updateWorkerState } from './state.js';
 
 const [stateDir, workerName, worktreePath, promptPath, resultPath, sessionId, model = ''] = process.argv.slice(2);
 const initialState = JSON.parse(readFileSync(join(stateDir, 'workers', `${workerName}.json`), 'utf8'));
 const initialTaskId = String(initialState.initial_task_id || initialState.index);
 updateWorkerState(stateDir, workerName, { status: 'working', started_at: new Date().toISOString(), pid: process.pid });
-updateTaskState(stateDir, initialTaskId, { status: 'in_progress', started_at: new Date().toISOString() });
+const initialClaim = claimTeamTask(stateDir, initialTaskId, workerName);
+if (!initialClaim.ok) throw new Error(`failed to claim initial task: ${initialClaim.error}`);
+let activeClaim = { taskId: initialTaskId, token: initialClaim.token };
 
 let activeSessionId = sessionId;
 let child = launchTrae(['exec', '--json', '--skip-git-repo-check', '-C', worktreePath, '--sandbox', 'workspace-write', '--session-id', sessionId, '--output-last-message', resultPath], readFileSync(promptPath, 'utf8'));
 const heartbeat = setInterval(() => {
   updateWorkerState(stateDir, workerName, { heartbeat_at: new Date().toISOString() });
+  if (activeClaim) renewTaskClaim(stateDir, activeClaim.taskId, workerName, activeClaim.token);
 }, 5000);
 const forwardSignal = (signal) => {
   if (!child.killed) child.kill(signal);
@@ -46,12 +49,21 @@ if (currentState.status === 'cancelled') {
   process.exitCode = 0;
   process.exit();
 }
-updateWorkerState(stateDir, workerName, {
+const initialCompletion = completeClaimedTask(stateDir, initialTaskId, workerName, initialClaim.token, {
   status: finalStatus,
+  completed_at: new Date().toISOString(),
+  commit: commitSha,
+  result_path: resultPath,
+});
+const persistedInitialStatus = initialCompletion.ok ? finalStatus : 'failed';
+updateWorkerState(stateDir, workerName, {
+  status: persistedInitialStatus,
   exit_code: exitCode,
   completed_at: new Date().toISOString(),
   commit: commitSha,
-  error: finalStatus === 'failed'
+  error: !initialCompletion.ok
+    ? initialCompletion.error
+    : finalStatus === 'failed'
     ? exitCode !== 0
       ? `traex exited ${exitCode}`
       : !commitSatisfied
@@ -59,25 +71,26 @@ updateWorkerState(stateDir, workerName, {
         : !clean
           ? 'worker worktree is dirty after completion'
           : 'worker produced no result'
-    : null,
+      : null,
 });
-updateTaskState(stateDir, initialTaskId, {
-  status: finalStatus,
-  completed_at: new Date().toISOString(),
-  commit: commitSha,
-  result_path: resultPath,
-});
-process.stdout.write(`\n[otx] ${workerName} ${finalStatus}; waiting for leader shutdown.\n`);
+activeClaim = null;
+process.stdout.write(`\n[otx] ${workerName} ${persistedInitialStatus}; waiting for leader shutdown.\n`);
 process.exitCode = 0;
 while (true) {
-  const message = readMailbox(stateDir, workerName).messages.find((item) => item.status === 'pending');
-  if (!message) {
+  const selected = selectPendingMessage();
+  if (!selected) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     continue;
   }
+  const { message, taskClaim } = selected;
+  activeClaim = taskClaim ? { taskId: message.task_id, token: taskClaim.token } : null;
   updateMailboxMessage(stateDir, workerName, message.id, { status: 'working', started_at: new Date().toISOString() });
-  updateWorkerState(stateDir, workerName, { status: 'working', current_message_id: message.id, current_task_id: message.task_id });
-  if (message.task_id) updateTaskState(stateDir, message.task_id, { status: 'in_progress', started_at: new Date().toISOString() });
+  updateWorkerState(stateDir, workerName, {
+    status: 'working',
+    current_message_id: message.id,
+    current_task_id: message.task_id,
+    blocked_task_ids: [],
+  });
   const followupBaseCommit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: worktreePath, encoding: 'utf8' }).stdout.trim();
   const followupStartState = JSON.parse(readFileSync(join(stateDir, 'workers', workerName + '.json'), 'utf8'));
   const followupPath = join(stateDir, 'workers', workerName, `followup-${message.id}.md`);
@@ -110,35 +123,71 @@ while (true) {
     && followupHasResult
     ? 'completed'
     : 'failed';
-  updateMailboxMessage(stateDir, workerName, message.id, {
-    status: followupStatus,
-    completed_at: new Date().toISOString(),
-    result_path: followupPath,
-    commit: followupCommitSha,
-    error: followupStatus === 'failed'
-      ? followupExit !== 0 ? `follow-up exited ${followupExit}`
-        : !followupCommitSatisfied ? 'follow-up task produced no commit'
-          : !followupHasResult ? 'follow-up produced no result'
-            : 'follow-up worktree is dirty'
-      : null,
-  });
+  const followupError = followupStatus === 'failed'
+    ? followupExit !== 0 ? `follow-up exited ${followupExit}`
+      : !followupCommitSatisfied ? 'follow-up task produced no commit'
+        : !followupHasResult ? 'follow-up produced no result'
+          : 'follow-up worktree is dirty'
+    : null;
+  let persistedFollowupStatus = followupStatus;
+  let persistedFollowupError = followupError;
   if (message.task_id) {
-    updateTaskState(stateDir, message.task_id, {
+    const completion = completeClaimedTask(stateDir, message.task_id, workerName, taskClaim.token, {
       status: followupStatus,
       completed_at: new Date().toISOString(),
       commit: followupCommitSha,
       result_path: followupPath,
-      error: followupStatus === 'failed' ? `follow-up exited ${followupExit}` : null,
+      error: followupError,
     });
+    if (!completion.ok) {
+      persistedFollowupStatus = 'failed';
+      persistedFollowupError = completion.error;
+    }
   }
+  updateMailboxMessage(stateDir, workerName, message.id, {
+    status: persistedFollowupStatus,
+    completed_at: new Date().toISOString(),
+    result_path: followupPath,
+    commit: followupCommitSha,
+    error: persistedFollowupError,
+  });
+  activeClaim = null;
   updateWorkerState(stateDir, workerName, {
-    status: followupStatus,
+    status: persistedFollowupStatus,
     current_message_id: null,
     current_task_id: null,
+    blocked_task_ids: [],
     commit: followupCommitSha,
     integration: followupCommitSha !== followupBaseCommit ? null : followupStartState.integration,
     completed_at: new Date().toISOString(),
+    error: persistedFollowupError,
   });
+}
+
+function selectPendingMessage() {
+  const pending = readMailbox(stateDir, workerName).messages.filter((item) => item.status === 'pending');
+  const blockedTaskIds = [];
+  for (const message of pending) {
+    if (!message.task_id) return { message, taskClaim: null };
+    const taskClaim = claimTeamTask(stateDir, message.task_id, workerName);
+    if (taskClaim.ok) return { message, taskClaim };
+    if (taskClaim.error === 'blocked_dependency') {
+      blockedTaskIds.push(message.task_id);
+      continue;
+    }
+    updateMailboxMessage(stateDir, workerName, message.id, {
+      status: 'failed', error: taskClaim.error, completed_at: new Date().toISOString(),
+    });
+  }
+  if (blockedTaskIds.length > 0) {
+    updateWorkerState(stateDir, workerName, {
+      status: 'blocked',
+      blocked_task_ids: blockedTaskIds,
+      current_message_id: null,
+      current_task_id: null,
+    });
+  }
+  return null;
 }
 
 function launchTrae(baseArgs, prompt) {

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { addTeamWorker, createTeamTask, enqueueMailboxMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, removeTeamWorker, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState } from '../src/team/state.js';
+import { spawn, spawnSync } from 'node:child_process';
+import { addTeamWorker, claimTeamTask, completeClaimedTask, createTeamTask, enqueueMailboxMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredTask, removeTeamWorker, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState } from '../src/team/state.js';
 
 test('persists team and worker state under the Git common directory', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-state-'));
@@ -83,3 +83,102 @@ test('adds and removes durable team membership without reusing worker indices', 
     rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+test('claims tasks only after dependencies complete and requires the claim token', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-claims-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const dependent = createTeamTask(stateDir, {
+      subject: 'dependent', description: 'dependent', owner: 'worker-1',
+      role: 'explorer', requires_commit: false, depends_on: ['1'],
+    });
+    const blocked = claimTeamTask(stateDir, dependent.id, 'worker-1');
+    assert.equal(blocked.error, 'blocked_dependency');
+    const blockedAgain = claimTeamTask(stateDir, dependent.id, 'worker-1');
+    assert.equal(blockedAgain.task.version, blocked.task.version);
+    updateTaskState(stateDir, '1', { status: 'completed' });
+    const claimed = claimTeamTask(stateDir, dependent.id, 'worker-1');
+    assert.equal(claimed.ok, true);
+    const renewed = renewTaskClaim(stateDir, dependent.id, 'worker-1', claimed.token);
+    assert.equal(renewed.ok, true);
+    assert.ok(Date.parse(renewed.task.claim.leased_until) > Date.now());
+    assert.equal(claimTeamTask(stateDir, dependent.id, 'worker-1').error, 'claim_conflict');
+    assert.equal(completeClaimedTask(stateDir, dependent.id, 'worker-1', 'wrong', { status: 'completed' }).error, 'claim_mismatch');
+    const completed = completeClaimedTask(stateDir, dependent.id, 'worker-1', claimed.token, { status: 'completed' });
+    assert.equal(completed.ok, true);
+    assert.equal(completed.task.status, 'completed');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('rejects completion after a claim lease expires', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-expired-completion-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const claimed = claimTeamTask(stateDir, '1', 'worker-1');
+    updateTaskState(stateDir, '1', { claim: { ...claimed.task.claim, leased_until: new Date(0).toISOString() } });
+    const completed = completeClaimedTask(stateDir, '1', 'worker-1', claimed.token, { status: 'completed' });
+    assert.equal(completed.error, 'lease_expired');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('reclaims only expired task leases', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-lease-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const claimed = claimTeamTask(stateDir, '1', 'worker-1');
+    assert.equal(reclaimExpiredTask(stateDir, '1').error, 'lease_active');
+    updateTaskState(stateDir, '1', { claim: { ...claimed.task.claim, leased_until: new Date(0).toISOString() } });
+    const reclaimed = reclaimExpiredTask(stateDir, '1');
+    assert.equal(reclaimed.reclaimed, true);
+    assert.equal(reclaimed.task.status, 'pending');
+    const claimedAgain = claimTeamTask(stateDir, '1', 'worker-1');
+    assert.equal(claimedAgain.ok, true);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('allows only one claim winner across concurrent processes', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-concurrent-claim-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const fixture = new URL('./fixtures/claim-task.js', import.meta.url);
+    const results = await Promise.all([
+      runClaimProcess(fixture, stateDir, '1', 'worker-1'),
+      runClaimProcess(fixture, stateDir, '1', 'worker-1'),
+    ]);
+    assert.equal(results.filter((result) => result.ok).length, 1);
+    assert.equal(results.filter((result) => result.error === 'claim_conflict').length, 1);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+function runClaimProcess(scriptUrl, stateDir, taskId, workerName) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [scriptUrl.pathname, stateDir, taskId, workerName], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code !== 0) reject(new Error(stderr || 'claim process failed'));
+      else resolve(JSON.parse(stdout));
+    });
+  });
+}

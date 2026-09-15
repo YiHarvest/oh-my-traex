@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -72,7 +72,9 @@ export function initTeamState({ cwd, name, task, model, leaderPaneId, leaderSess
       owner: worker.name,
       role: worker.role,
       requires_commit: worker.requires_commit,
+      depends_on: [],
       status: 'pending',
+      version: 1,
       created_at: new Date().toISOString(),
     });
   }
@@ -98,40 +100,59 @@ export function listTeamStates(cwd) {
 }
 
 export function updateWorkerState(stateDir, workerName, updates) {
-  const path = workerStatePath(stateDir, workerName);
-  const current = readJson(path);
-  const next = { ...current, ...updates, updated_at: new Date().toISOString() };
-  writeJsonAtomic(path, next);
-  return next;
+  return withRecordLock(stateDir, `worker-${workerName}`, () => {
+    const path = workerStatePath(stateDir, workerName);
+    const current = readJson(path);
+    const next = { ...current, ...updates, updated_at: new Date().toISOString() };
+    writeJsonAtomic(path, next);
+    return next;
+  });
 }
 
 export function updateTaskState(stateDir, taskId, updates) {
-  const path = taskStatePath(stateDir, taskId);
-  const current = readJson(path);
-  const next = { ...current, ...updates, updated_at: new Date().toISOString() };
-  writeJsonAtomic(path, next);
-  return next;
+  return withTaskLock(stateDir, taskId, () => {
+    const path = taskStatePath(stateDir, taskId);
+    const current = readJson(path);
+    const next = {
+      ...current,
+      ...updates,
+      version: updates.version ?? (current.version || 1) + 1,
+      updated_at: new Date().toISOString(),
+    };
+    writeJsonAtomic(path, next);
+    return next;
+  });
 }
 
 export function createTeamTask(stateDir, input) {
-  const tasksDir = join(stateDir, 'tasks');
-  const ids = readdirSync(tasksDir)
-    .map((name) => name.match(/^task-(\d+)\.json$/)?.[1])
-    .filter(Boolean)
-    .map(Number);
-  const id = String(ids.length === 0 ? 1 : Math.max(...ids) + 1);
-  const task = {
-    id,
-    subject: input.subject,
-    description: input.description,
-    owner: input.owner,
-    role: input.role,
-    requires_commit: input.requires_commit,
-    status: 'pending',
-    created_at: new Date().toISOString(),
-  };
-  writeJsonAtomic(taskStatePath(stateDir, id), task);
-  return task;
+  return withRecordLock(stateDir, 'task-create', () => {
+    const tasksDir = join(stateDir, 'tasks');
+    const ids = readdirSync(tasksDir)
+      .map((name) => name.match(/^task-(\d+)\.json$/)?.[1])
+      .filter(Boolean)
+      .map(Number);
+    const id = String(ids.length === 0 ? 1 : Math.max(...ids) + 1);
+    const dependsOn = [...new Set(input.depends_on || [])];
+    for (const dependencyId of dependsOn) {
+      if (!existsSync(taskStatePath(stateDir, dependencyId))) {
+        throw new Error(`task dependency not found: ${dependencyId}`);
+      }
+    }
+    const task = {
+      id,
+      subject: input.subject,
+      description: input.description,
+      owner: input.owner,
+      role: input.role,
+      requires_commit: input.requires_commit,
+      depends_on: dependsOn,
+      status: 'pending',
+      version: 1,
+      created_at: new Date().toISOString(),
+    };
+    writeJsonAtomic(taskStatePath(stateDir, id), task);
+    return task;
+  });
 }
 
 export function listTeamTasks(stateDir) {
@@ -141,6 +162,118 @@ export function listTeamTasks(stateDir) {
     .filter((name) => /^task-\d+\.json$/.test(name))
     .map((name) => readJson(join(tasksDir, name)))
     .sort((left, right) => Number(left.id) - Number(right.id));
+}
+
+export function readTeamTask(stateDir, taskId) {
+  return readJson(taskStatePath(stateDir, taskId));
+}
+
+export function claimTeamTask(stateDir, taskId, workerName) {
+  return withTaskLock(stateDir, taskId, () => {
+    let task = readTeamTask(stateDir, taskId);
+    if (task.status === 'in_progress' && task.claim) {
+      if (Date.parse(task.claim.leased_until) > Date.now()) {
+        return { ok: false, error: 'claim_conflict', task };
+      }
+      task = {
+        ...task,
+        status: 'pending',
+        claim: null,
+        version: (task.version || 1) + 1,
+        updated_at: new Date().toISOString(),
+      };
+    }
+    if (task.status !== 'pending' && task.status !== 'blocked') {
+      return { ok: false, error: 'task_not_pending', task };
+    }
+    if (task.owner && task.owner !== workerName) return { ok: false, error: 'owner_mismatch', task };
+    const incomplete = (task.depends_on || []).filter((dependencyId) =>
+      readTeamTask(stateDir, dependencyId).status !== 'completed',
+    );
+    if (incomplete.length > 0) {
+      if (task.status === 'blocked'
+        && JSON.stringify(task.blocked_by || []) === JSON.stringify(incomplete)) {
+        return { ok: false, error: 'blocked_dependency', dependencies: incomplete, task };
+      }
+      const blocked = {
+        ...task,
+        status: 'blocked',
+        blocked_by: incomplete,
+        version: (task.version || 1) + 1,
+        updated_at: new Date().toISOString(),
+      };
+      writeJsonAtomic(taskStatePath(stateDir, taskId), blocked);
+      return { ok: false, error: 'blocked_dependency', dependencies: incomplete, task: blocked };
+    }
+    const token = randomUUID();
+    const claimed = {
+      ...task,
+      status: 'in_progress',
+      owner: workerName,
+      blocked_by: [],
+      claim: { owner: workerName, token, leased_until: new Date(Date.now() + 15 * 60_000).toISOString() },
+      version: (task.version || 1) + 1,
+      started_at: task.started_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    writeJsonAtomic(taskStatePath(stateDir, taskId), claimed);
+    return { ok: true, token, task: claimed };
+  });
+}
+
+export function reclaimExpiredTask(stateDir, taskId) {
+  return withTaskLock(stateDir, taskId, () => {
+    const task = readTeamTask(stateDir, taskId);
+    if (task.status !== 'in_progress' || !task.claim) return { ok: true, reclaimed: false, task };
+    if (Date.parse(task.claim.leased_until) > Date.now()) return { ok: false, error: 'lease_active', task };
+    const reclaimed = {
+      ...task,
+      status: 'pending',
+      claim: null,
+      version: (task.version || 1) + 1,
+      updated_at: new Date().toISOString(),
+    };
+    writeJsonAtomic(taskStatePath(stateDir, taskId), reclaimed);
+    return { ok: true, reclaimed: true, task: reclaimed };
+  });
+}
+
+export function completeClaimedTask(stateDir, taskId, workerName, token, updates) {
+  return withTaskLock(stateDir, taskId, () => {
+    const task = readTeamTask(stateDir, taskId);
+    if (task.claim?.owner !== workerName || task.claim?.token !== token) {
+      return { ok: false, error: 'claim_mismatch', task };
+    }
+    if (Date.parse(task.claim.leased_until) <= Date.now()) {
+      return { ok: false, error: 'lease_expired', task };
+    }
+    const completed = {
+      ...task,
+      ...updates,
+      claim: null,
+      version: (task.version || 1) + 1,
+      updated_at: new Date().toISOString(),
+    };
+    writeJsonAtomic(taskStatePath(stateDir, taskId), completed);
+    return { ok: true, task: completed };
+  });
+}
+
+export function renewTaskClaim(stateDir, taskId, workerName, token) {
+  return withTaskLock(stateDir, taskId, () => {
+    const task = readTeamTask(stateDir, taskId);
+    if (task.status !== 'in_progress' || task.claim?.owner !== workerName || task.claim?.token !== token) {
+      return { ok: false, error: 'claim_mismatch', task };
+    }
+    const renewed = {
+      ...task,
+      claim: { ...task.claim, leased_until: new Date(Date.now() + 15 * 60_000).toISOString() },
+      version: (task.version || 1) + 1,
+      updated_at: new Date().toISOString(),
+    };
+    writeJsonAtomic(taskStatePath(stateDir, taskId), renewed);
+    return { ok: true, task: renewed };
+  });
 }
 
 export function enqueueMailboxMessage(stateDir, workerName, message) {
@@ -176,52 +309,60 @@ export function readMailbox(stateDir, workerName) {
 export function updateMailboxMessage(stateDir, workerName, messageId, updates) {
   const path = mailboxMessagePath(stateDir, workerName, messageId);
   if (!existsSync(path)) throw new Error(`mailbox message not found: ${messageId}`);
-  const updated = { ...readJson(path), ...updates, updated_at: new Date().toISOString() };
-  writeJsonAtomic(path, updated);
-  return updated;
+  return withRecordLock(stateDir, `mailbox-${messageId}`, () => {
+    const updated = { ...readJson(path), ...updates, updated_at: new Date().toISOString() };
+    writeJsonAtomic(path, updated);
+    return updated;
+  });
 }
 
 export function updateTeamConfig(stateDir, updates) {
-  const path = join(stateDir, 'config.json');
-  const current = readJson(path);
-  const next = { ...current, ...updates, updated_at: new Date().toISOString() };
-  writeJsonAtomic(path, next);
-  return next;
+  return withRecordLock(stateDir, 'team-config', () => {
+    const path = join(stateDir, 'config.json');
+    const current = readJson(path);
+    const next = { ...current, ...updates, updated_at: new Date().toISOString() };
+    writeJsonAtomic(path, next);
+    return next;
+  });
 }
 
 export function addTeamWorker(stateDir, worker) {
-  const configPath = join(stateDir, 'config.json');
-  const config = readJson(configPath);
-  if (config.workers.includes(worker.name)) throw new Error(`worker already exists: ${worker.name}`);
-  writeJsonAtomic(workerStatePath(stateDir, worker.name), worker);
-  mkdirSync(mailboxDir(stateDir, worker.name), { recursive: true });
-  const task = createTeamTask(stateDir, {
-    subject: worker.assignment,
-    description: worker.assignment,
-    owner: worker.name,
-    role: worker.role,
-    requires_commit: worker.requires_commit,
+  return withRecordLock(stateDir, 'team-config', () => {
+    const configPath = join(stateDir, 'config.json');
+    const config = readJson(configPath);
+    if (config.workers.includes(worker.name)) throw new Error(`worker already exists: ${worker.name}`);
+    writeJsonAtomic(workerStatePath(stateDir, worker.name), worker);
+    mkdirSync(mailboxDir(stateDir, worker.name), { recursive: true });
+    const task = createTeamTask(stateDir, {
+      subject: worker.assignment,
+      description: worker.assignment,
+      owner: worker.name,
+      role: worker.role,
+      requires_commit: worker.requires_commit,
+    });
+    writeJsonAtomic(workerStatePath(stateDir, worker.name), { ...worker, initial_task_id: task.id });
+    writeJsonAtomic(configPath, {
+      ...config,
+      workers: [...config.workers, worker.name],
+      next_worker_index: Math.max(config.next_worker_index || 1, worker.index + 1),
+      status: 'running',
+      updated_at: new Date().toISOString(),
+    });
+    return task;
   });
-  writeJsonAtomic(workerStatePath(stateDir, worker.name), { ...worker, initial_task_id: task.id });
-  writeJsonAtomic(configPath, {
-    ...config,
-    workers: [...config.workers, worker.name],
-    next_worker_index: Math.max(config.next_worker_index || 1, worker.index + 1),
-    status: 'running',
-    updated_at: new Date().toISOString(),
-  });
-  return task;
 }
 
 export function removeTeamWorker(stateDir, workerName) {
-  const configPath = join(stateDir, 'config.json');
-  const config = readJson(configPath);
-  if (!config.workers.includes(workerName)) throw new Error(`worker not found: ${workerName}`);
-  writeJsonAtomic(configPath, {
-    ...config,
-    workers: config.workers.filter((name) => name !== workerName),
-    status: config.workers.length === 1 ? 'empty' : config.status,
-    updated_at: new Date().toISOString(),
+  return withRecordLock(stateDir, 'team-config', () => {
+    const configPath = join(stateDir, 'config.json');
+    const config = readJson(configPath);
+    if (!config.workers.includes(workerName)) throw new Error(`worker not found: ${workerName}`);
+    writeJsonAtomic(configPath, {
+      ...config,
+      workers: config.workers.filter((name) => name !== workerName),
+      status: config.workers.length === 1 ? 'empty' : config.status,
+      updated_at: new Date().toISOString(),
+    });
   });
 }
 
@@ -250,6 +391,34 @@ export function writeJsonAtomic(path, value) {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function withTaskLock(stateDir, taskId, callback) {
+  return withRecordLock(stateDir, `task-${taskId}`, callback);
+}
+
+function withRecordLock(stateDir, recordName, callback) {
+  const lockPath = join(stateDir, '.locks', `${recordName}.lock`);
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    try {
+      mkdirSync(lockPath);
+      break;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > 30_000) rmSync(lockPath, { recursive: true });
+      } catch {}
+      if (Date.now() >= deadline) throw new Error(`record lock timeout: ${recordName}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    return callback();
+  } finally {
+    rmSync(lockPath, { recursive: true, force: true });
+  }
 }
 
 function git(cwd, args) {

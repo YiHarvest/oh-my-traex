@@ -169,7 +169,7 @@ export function stopTeam(cwd, name, run = spawnSync) {
           status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
         });
         if (worker.current_task_id) updateTaskState(state.stateDir, worker.current_task_id, {
-          status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
+          status: 'cancelled', claim: null, error: 'stopped by team leader', completed_at: stoppedAt,
         });
       } else if (worker.status === 'queued') {
         for (const message of readMailbox(state.stateDir, worker.name).messages.filter((item) => item.status === 'pending')) {
@@ -177,12 +177,12 @@ export function stopTeam(cwd, name, run = spawnSync) {
             status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
           });
           if (message.task_id) updateTaskState(state.stateDir, message.task_id, {
-            status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
+            status: 'cancelled', claim: null, error: 'stopped by team leader', completed_at: stoppedAt,
           });
         }
       } else {
         updateTaskState(state.stateDir, worker.initial_task_id || String(worker.index), {
-          status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
+          status: 'cancelled', claim: null, error: 'stopped by team leader', completed_at: stoppedAt,
         });
       }
     }
@@ -248,28 +248,31 @@ export function diagnoseTeam(cwd, name) {
       child_pid: worker.child_pid ?? null,
       current_task_id: worker.current_task_id ?? null,
       current_message_id: worker.current_message_id ?? null,
+      blocked_task_ids: worker.blocked_task_ids ?? [],
       worktree_dirty: worker.dirty,
       error: worker.error ?? null,
     })),
   };
 }
 
-export function assignTeamTask(cwd, name, workerName, description) {
+export function assignTeamTask(cwd, name, workerName, description, dependsOn = []) {
   const state = teamStatus(cwd, name);
   const worker = state.workers.find((candidate) => candidate.name === workerName);
   if (!worker) throw new Error(`worker not found: ${workerName}`);
   if (!worker.pane_alive) throw new Error(`worker is not running: ${workerName}`);
-  if (['queued', 'working'].includes(worker.status)) throw new Error(`worker is busy: ${workerName}`);
   const task = createTeamTask(state.stateDir, {
     subject: description,
     description,
     owner: workerName,
     role: worker.role,
     requires_commit: worker.requires_commit,
+    depends_on: dependsOn,
   });
   const body = `New OTX team task ${task.id}: ${description} Follow your existing worker contract, verify the result, and ${worker.requires_commit ? 'commit all intended changes.' : 'avoid changes unless essential.'}`;
   const message = enqueueTaskMessage(state.stateDir, workerName, task.id, body);
-  updateWorkerState(state.stateDir, workerName, { status: 'queued' });
+  updateWorkerState(state.stateDir, workerName, {
+    status: worker.status === 'working' ? 'working' : 'queued',
+  });
   updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
   return { task, message };
 }
