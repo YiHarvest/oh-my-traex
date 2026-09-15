@@ -38,6 +38,8 @@ node src/cli.js team list
 node src/cli.js team status auth-team
 node src/cli.js team await auth-team
 node src/cli.js team resume auth-team
+node src/cli.js team send auth-team worker-1 "Add an edge-case test and commit it"
+node src/cli.js team broadcast auth-team "Re-run verification and report blockers"
 node src/cli.js team stop auth-team
 ```
 
@@ -64,6 +66,9 @@ otx run "Your task"
 | `otx team status <name>` | Show durable worker, pane, worktree, commit, and result state |
 | `otx team await <name>` | Wait until every worker reaches a terminal state |
 | `otx team resume <name>` | Resume the persisted TraeX leader session |
+| `otx team send <name> <worker> <message>` | Queue a durable follow-up for one worker session |
+| `otx team broadcast <name> <message>` | Queue the same follow-up for all workers |
+| `otx team mailbox <name> <worker>` | Inspect persisted follow-up delivery/results |
 | `otx team stop <name>` | Safely stop panes after validating ownership |
 
 Useful options include `--workers 1..6`, `--mode conservative|balanced|aggressive`, `--model`, `--cwd`, `--read-only`, `--json`, and `--dry-run`.

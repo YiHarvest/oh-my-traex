@@ -1,17 +1,37 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { awaitTeam, resumeTeam, startTeam, stopTeam, teamStatus } from './runtime.js';
+import { awaitTeam, broadcastTeamMessage, readTeamMailbox, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
 import { listTeamStates } from './state.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 
 export function parseTeamArgs(args) {
   const tokens = [...args];
-  const subcommand = ['list', 'status', 'await', 'resume', 'stop'].includes(tokens[0]) ? tokens.shift() : 'start';
+  const subcommand = ['list', 'status', 'await', 'resume', 'stop', 'send', 'broadcast', 'mailbox'].includes(tokens[0]) ? tokens.shift() : 'start';
   const options = { workers: 3, cwd: process.cwd(), timeoutMs: 3_600_000 };
   if (subcommand === 'list') {
     parseOptions(tokens, options);
     return { subcommand, options };
+  }
+  if (subcommand === 'send') {
+    const name = tokens.shift();
+    const worker = tokens.shift();
+    const message = parseMessageAndOptions(tokens, options);
+    if (!name || !worker || !message) throw new Error('Usage: otx team send <team> <worker> "message"');
+    return { subcommand, name, worker, message, options };
+  }
+  if (subcommand === 'broadcast') {
+    const name = tokens.shift();
+    const message = parseMessageAndOptions(tokens, options);
+    if (!name || !message) throw new Error('Usage: otx team broadcast <team> "message"');
+    return { subcommand, name, message, options };
+  }
+  if (subcommand === 'mailbox') {
+    const name = tokens.shift();
+    const worker = tokens.shift();
+    parseOptions(tokens, options);
+    if (!name || !worker) throw new Error('Usage: otx team mailbox <team> <worker>');
+    return { subcommand, name, worker, options };
   }
   if (subcommand !== 'start') {
     const name = tokens.shift();
@@ -54,6 +74,18 @@ export function runTeamCommand(args) {
   const parsed = parseTeamArgs(args);
   const cwd = resolve(parsed.options.cwd);
   if (parsed.subcommand === 'list') return printTeams(listTeamStates(cwd), parsed.options.json);
+  if (parsed.subcommand === 'send') {
+    process.stdout.write(`${JSON.stringify(sendTeamMessage(cwd, parsed.name, parsed.worker, parsed.message), null, 2)}\n`);
+    return 0;
+  }
+  if (parsed.subcommand === 'broadcast') {
+    process.stdout.write(`${JSON.stringify(broadcastTeamMessage(cwd, parsed.name, parsed.message), null, 2)}\n`);
+    return 0;
+  }
+  if (parsed.subcommand === 'mailbox') {
+    process.stdout.write(`${JSON.stringify(readTeamMailbox(cwd, parsed.name, parsed.worker), null, 2)}\n`);
+    return 0;
+  }
   if (parsed.subcommand === 'status') return printStatus(teamStatus(cwd, parsed.name), parsed.options.json);
   if (parsed.subcommand === 'stop') {
     printStatus(stopTeam(cwd, parsed.name), parsed.options.json);
@@ -103,6 +135,21 @@ function parseOptions(tokens, options) {
     else throw new Error(`Unknown team option: ${token}`);
   }
   if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1) throw new Error('--timeout-ms must be a positive integer.');
+}
+
+function parseMessageAndOptions(tokens, options) {
+  const messageParts = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === '--') {
+      messageParts.push(...tokens.slice(index + 1));
+      break;
+    }
+    if (token === '--cwd' || token === '-C') options.cwd = requireValue(tokens, ++index, token);
+    else if (token === '--json') options.json = true;
+    else messageParts.push(token);
+  }
+  return messageParts.join(' ').trim();
 }
 
 function printStatus(state, json = false) {

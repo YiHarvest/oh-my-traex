@@ -46,6 +46,7 @@ export function initTeamState({ cwd, name, task, leaderPaneId, leaderSessionId, 
   if (existsSync(join(stateDir, 'config.json'))) throw new Error(`team already exists: ${name}`);
   mkdirSync(join(stateDir, 'workers'), { recursive: true });
   mkdirSync(join(stateDir, 'tasks'), { recursive: true });
+  mkdirSync(join(stateDir, 'mailbox'), { recursive: true });
   const config = {
     schema_version: 1,
     name,
@@ -61,6 +62,7 @@ export function initTeamState({ cwd, name, task, leaderPaneId, leaderSessionId, 
   writeJsonAtomic(join(stateDir, 'config.json'), config);
   for (const worker of workers) {
     writeJsonAtomic(workerStatePath(stateDir, worker.name), worker);
+    mkdirSync(mailboxDir(stateDir, worker.name), { recursive: true });
     writeJsonAtomic(taskStatePath(stateDir, String(worker.index)), {
       id: String(worker.index),
       subject: worker.assignment,
@@ -109,6 +111,38 @@ export function updateTaskState(stateDir, taskId, updates) {
   return next;
 }
 
+export function enqueueMailboxMessage(stateDir, workerName, message) {
+  const created = {
+    id: randomUUID(),
+    body: message,
+    status: 'pending',
+    created_at: new Date().toISOString(),
+  };
+  writeJsonAtomic(mailboxMessagePath(stateDir, workerName, created.id), created);
+  return created;
+}
+
+export function readMailbox(stateDir, workerName) {
+  const directory = mailboxDir(stateDir, workerName);
+  if (!existsSync(directory)) return { worker: workerName, messages: [] };
+  const messages = readdirSync(directory)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => readJson(join(directory, name)))
+    .sort((left, right) =>
+      String(left.created_at).localeCompare(String(right.created_at))
+      || String(left.id).localeCompare(String(right.id)),
+    );
+  return { worker: workerName, messages };
+}
+
+export function updateMailboxMessage(stateDir, workerName, messageId, updates) {
+  const path = mailboxMessagePath(stateDir, workerName, messageId);
+  if (!existsSync(path)) throw new Error(`mailbox message not found: ${messageId}`);
+  const updated = { ...readJson(path), ...updates, updated_at: new Date().toISOString() };
+  writeJsonAtomic(path, updated);
+  return updated;
+}
+
 export function updateTeamConfig(stateDir, updates) {
   const path = join(stateDir, 'config.json');
   const current = readJson(path);
@@ -123,6 +157,14 @@ export function workerStatePath(stateDir, workerName) {
 
 export function taskStatePath(stateDir, taskId) {
   return join(stateDir, 'tasks', `task-${taskId}.json`);
+}
+
+export function mailboxDir(stateDir, workerName) {
+  return join(stateDir, 'mailbox', workerName);
+}
+
+export function mailboxMessagePath(stateDir, workerName, messageId) {
+  return join(mailboxDir(stateDir, workerName), `${messageId}.json`);
 }
 
 export function writeJsonAtomic(path, value) {

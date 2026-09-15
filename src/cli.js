@@ -17,6 +17,8 @@ Usage:
   otx team [N:role] [options] "task"
   otx team list
   otx team status|await|resume|stop <team-name>
+  otx team send <team-name> <worker> "message"
+  otx team broadcast <team-name> "message"
   otx roles
   otx doctor
 

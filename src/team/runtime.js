@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { buildLeaderPrompt, buildWorkerPrompt } from './prompt.js';
-import { assertTeamDoesNotExist, defaultTeamName, initTeamState, readTeamState, sanitizeTeamName, updateTaskState, updateTeamConfig, updateWorkerState } from './state.js';
+import { assertTeamDoesNotExist, defaultTeamName, enqueueMailboxMessage, initTeamState, readMailbox, readTeamState, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState } from './state.js';
 import { assertCleanWorkspace, createWorkerWorktrees, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
 
 export function startTeam({ cwd, task, workerCount, model, teamName, baseRole, env = process.env, run = spawnSync }) {
@@ -133,7 +133,6 @@ export function stopTeam(cwd, name, run = spawnSync) {
   const state = readTeamState(cwd, name);
   for (const worker of state.workers) {
     const terminal = ['completed', 'failed', 'cancelled'].includes(worker.status);
-    if (paneOwnedBy(run, worker, state.config)) run('tmux', ['kill-pane', '-t', worker.pane_id], { encoding: 'utf8' });
     if (!terminal) {
       const stoppedAt = new Date().toISOString();
       updateWorkerState(state.stateDir, worker.name, {
@@ -141,15 +140,52 @@ export function stopTeam(cwd, name, run = spawnSync) {
         error: 'stopped by team leader',
         completed_at: stoppedAt,
       });
-      updateTaskState(state.stateDir, String(worker.index), {
-        status: 'cancelled',
-        error: 'stopped by team leader',
-        completed_at: stoppedAt,
-      });
+      if (worker.current_message_id) {
+        updateMailboxMessage(state.stateDir, worker.name, worker.current_message_id, {
+          status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
+        });
+      } else {
+        updateTaskState(state.stateDir, String(worker.index), {
+          status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
+        });
+      }
     }
+    if (paneOwnedBy(run, worker, state.config)) run('tmux', ['kill-pane', '-t', worker.pane_id], { encoding: 'utf8' });
   }
   updateTeamConfig(state.stateDir, { status: 'stopped', stopped_at: new Date().toISOString() });
   return teamStatus(cwd, name, run);
+}
+
+export function sendTeamMessage(cwd, name, workerName, message) {
+  const state = teamStatus(cwd, name);
+  const worker = state.workers.find((candidate) => candidate.name === workerName);
+  if (!worker) throw new Error(`worker not found: ${workerName}`);
+  if (!worker.pane_alive) throw new Error(`worker is not running: ${workerName}`);
+  const created = enqueueMailboxMessage(state.stateDir, workerName, message);
+  updateWorkerState(state.stateDir, workerName, { status: 'queued', current_message_id: created.id });
+  updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
+  return created;
+}
+
+export function broadcastTeamMessage(cwd, name, message) {
+  const state = teamStatus(cwd, name);
+  const workers = state.workers.filter((worker) => worker.pane_alive);
+  if (workers.length === 0) throw new Error(`team has no running workers: ${name}`);
+  const messages = workers.map((worker) => {
+    const created = enqueueMailboxMessage(state.stateDir, worker.name, message);
+    updateWorkerState(state.stateDir, worker.name, { status: 'queued', current_message_id: created.id });
+    return { worker: worker.name, message: created };
+  });
+  updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
+  return messages;
+}
+
+export function readTeamMailbox(cwd, name, workerName) {
+  const state = readTeamState(cwd, name);
+  if (!state.workers.some((worker) => worker.name === workerName)) {
+    throw new Error(`worker not found: ${workerName}`);
+  }
+  return readMailbox(state.stateDir, workerName);
 }
 
 export function resumeTeam(cwd, name, { model, env = process.env, run = spawnSync } = {}) {
