@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#07111f">
+    <title>oh-my-traex · Orchestration Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div id="app-shell" class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark" aria-hidden="true">B</div>
+          <div class="brand-copy">
+            <strong>oh-my-traex</strong>
+            <span>Multi-agent Orchestration</span>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button id="status-button" class="status-pill" type="button" aria-label="System status">
+            <span class="status-dot"></span>
+            <span id="connection-label">Connecting Live</span>
+          </button>
+          <button class="icon-button" type="button" data-action="toggle-notifications" aria-label="Notifications">
+            <i data-lucide="bell" aria-hidden="true"></i>
+            <span class="notification-badge">2</span>
+          </button>
+          <div class="avatar" aria-label="Signed in as Samuel">S</div>
+        </div>
+      </header>
+
+      <div class="workspace-shell">
+        <aside class="sidebar" aria-label="Workspace navigation">
+          <div class="sidebar-scroll">
+            <section class="workspace-section">
+              <div class="section-label">Workspace</div>
+              <nav class="sidebar-nav">
+                <button class="nav-item active" type="button" data-nav="tasks">
+                  <i data-lucide="list-checks" aria-hidden="true"></i>
+                  <span>Tasks</span>
+                </button>
+                <button class="nav-item" type="button" data-nav="sessions">
+                  <i data-lucide="monitor-dot" aria-hidden="true"></i>
+                  <span>Sessions</span>
+                </button>
+              </nav>
+            </section>
+
+            <section class="task-section">
+              <div class="section-heading">
+                <div class="section-label">Tasks</div>
+                <button class="tiny-icon-button" type="button" data-action="new-task" aria-label="Create task">
+                  <i data-lucide="plus" aria-hidden="true"></i>
+                </button>
+              </div>
+              <div id="task-list" class="task-list" aria-live="polite"></div>
+            </section>
+
+            <nav class="utility-nav">
+              <button class="nav-item" type="button" data-action="show-settings">
+                <i data-lucide="settings" aria-hidden="true"></i>
+                <span>Settings</span>
+              </button>
+              <a class="nav-item" href="https://github.com/YiHarvest/oh-my-traex" target="_blank" rel="noreferrer">
+                <i data-lucide="circle-help" aria-hidden="true"></i>
+                <span>Documentation</span>
+              </a>
+            </nav>
+          </div>
+          <div class="user-card">
+            <div class="avatar avatar-small">S</div>
+            <div class="user-copy"><strong>Samuel</strong><span>sam@startup.dev</span></div>
+          </div>
+        </aside>
+
+        <main class="main-panel" data-screen-label="Orchestration Dashboard">
+          <section class="task-header">
+            <div class="task-title-row">
+              <span id="current-task-id" class="task-id">Task #1</span>
+              <h1 id="current-task-title">Implement user authentication</h1>
+              <span id="current-status" class="status-chip working">Working</span>
+            </div>
+            <div class="task-meta">
+              <span id="created-time">Created 12m ago</span>
+              <span class="meta-divider"></span>
+              <span><i data-lucide="user-round" aria-hidden="true"></i><span id="current-owner">Samuel</span></span>
+              <span class="meta-divider"></span>
+              <span><i data-lucide="cpu" aria-hidden="true"></i><span id="current-model">gpt-5.3-codex</span></span>
+            </div>
+          </section>
+
+          <section id="dependency-strip" class="dependency-strip" aria-label="Agent dependency graph"></section>
+
+          <section class="content-grid">
+            <div class="agent-stack">
+              <article class="agent-card parent-card">
+                <div class="agent-head">
+                  <div>
+                    <div class="eyebrow">Parent agent</div>
+                    <h2>Orchestrator</h2>
+                  </div>
+                  <span id="orchestrator-status" class="status-chip working"><span class="spinner"></span>Working</span>
+                </div>
+                <div class="agent-meta"><span>Model <strong id="orchestrator-model">gpt-5.3-codex</strong></span><span>Role <strong>Coordinator</strong></span></div>
+                <p>Coordinating sub-agents, validating task boundaries, and maintaining the integration sequence.</p>
+                <div class="progress-block">
+                  <div class="progress-copy"><span>Overall progress</span><strong id="progress-value">68%</strong></div>
+                  <div class="progress-track"><span id="progress-bar" style="width: 68%"></span></div>
+                </div>
+              </article>
+
+              <div class="branch-guide" aria-hidden="true"><span></span><span></span><span></span></div>
+
+              <div id="child-agent-grid" class="child-agent-grid"></div>
+              <button class="add-node-button" type="button" data-action="add-node">
+                <i data-lucide="plus" aria-hidden="true"></i>
+                Add Node
+              </button>
+            </div>
+
+            <aside class="inspector" aria-label="Task inspector">
+              <div class="inspector-tabs" role="tablist">
+                <button class="inspector-tab active" type="button" role="tab" data-tab="tasks">Tasks <span>3</span></button>
+                <button class="inspector-tab" type="button" role="tab" data-tab="activity">Activity <span>8</span></button>
+              </div>
+              <div id="inspector-content" class="inspector-content"></div>
+            </aside>
+          </section>
+
+          <section class="monitor-panel">
+            <div class="terminal">
+              <div class="terminal-toolbar">
+                <div class="terminal-title"><span class="live-dot"></span><strong>Live execution</strong><span id="terminal-worker">worker-2</span></div>
+                <span class="terminal-status">streaming</span>
+              </div>
+              <div id="terminal-lines" class="terminal-lines" aria-live="polite"></div>
+            </div>
+            <aside class="monitor-summary">
+              <div class="summary-heading"><span>Runtime</span><strong>Live</strong></div>
+              <div class="summary-grid">
+                <div class="summary-cell"><span>Agents</span><strong id="summary-agents">3</strong></div>
+                <div class="summary-cell"><span>Tokens</span><strong id="summary-tokens">12.4k</strong></div>
+                <div class="summary-cell"><span>Duration</span><strong id="summary-duration">12m</strong></div>
+                <div class="summary-cell"><span>Cost</span><strong id="summary-cost">$0.42</strong></div>
+              </div>
+              <div class="quick-actions">
+                <div class="section-label">Quick actions</div>
+                <div class="quick-action-row">
+                  <button class="quick-button primary" type="button" data-action="run-task">
+                    <i data-lucide="play" aria-hidden="true"></i>Run
+                  </button>
+                  <button class="quick-button danger" type="button" data-action="stop-task">
+                    <i data-lucide="square" aria-hidden="true"></i>Stop
+                  </button>
+                  <button class="quick-button" type="button" data-action="retry-task">
+                    <i data-lucide="refresh-cw" aria-hidden="true"></i>Retry
+                  </button>
+                </div>
+              </div>
+            </aside>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <div id="modal-backdrop" class="modal-backdrop" hidden>
+      <form id="task-form" class="task-modal">
+        <div class="modal-head"><div><span class="eyebrow">New orchestration</span><h2>Launch Task</h2></div><button type="button" class="icon-button" data-action="close-modal" aria-label="Close"><i data-lucide="x" aria-hidden="true"></i></button></div>
+        <label>Task name<input id="task-name" name="taskName" autocomplete="off" placeholder="e.g. Harden session recovery" required minlength="4"></label>
+        <label>Model<select id="task-model" name="model"><option>Seed-2.1-Turbo</option><option>GPT-5.6-Sol</option><option>GPT-5.4</option><option>GPT-5.5</option></select></label>
+        <label>Agent count<input id="task-agents" name="agents" type="number" min="1" max="6" value="3"></label>
+        <p id="form-error" class="form-error" aria-live="polite"></p>
+        <div class="modal-actions"><button type="button" class="secondary-button" data-action="close-modal">Cancel</button><button class="primary-button" type="submit">Create & Run</button></div>
+      </form>
+    </div>
+
+    <div id="settings-panel" class="settings-panel" hidden>
+      <div class="settings-head"><div><span class="eyebrow">Display</span><h2>Console settings</h2></div><button class="icon-button" type="button" data-action="close-settings" aria-label="Close settings"><i data-lucide="x" aria-hidden="true"></i></button></div>
+      <label class="switch-row"><span><strong>Compact density</strong><small>Tighten cards and logs</small></span><input id="density-toggle" type="checkbox"></label>
+      <label class="switch-row"><span><strong>Show completed nodes</strong><small>Keep finished agents in the graph</small></span><input id="completed-toggle" type="checkbox" checked></label>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <!-- OTX_LIVE_BOOTSTRAP -->
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

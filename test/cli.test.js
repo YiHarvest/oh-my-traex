@@ -37,3 +37,12 @@ test('dashboard mode rejects JSON exec output', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /--json cannot be used with --ui dashboard/);
 });
+
+test('live dashboard help does not start a server', () => {
+  const result = spawnSync(process.execPath, ['src/cli.js', 'dashboard', '--help'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /otx dashboard \[-C repository\]/);
+});

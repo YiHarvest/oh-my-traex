@@ -34,6 +34,7 @@ node src/cli.js run --ui dashboard "Implement login rate limiting and tests"
 node src/cli.js run -n 3 --mode conservative "Audit the authorization layer"
 node src/cli.js prompt "Refactor the parser without changing behavior"
 node src/cli.js team 3:executor --name auth-team "Implement authentication and tests"
+node src/cli.js team --workers 3 --name planned-team "Implement and review authentication"
 node src/cli.js team list
 node src/cli.js team status auth-team
 node src/cli.js team await auth-team
@@ -49,6 +50,7 @@ node src/cli.js team remove-worker auth-team worker-4
 node src/cli.js team integrate auth-team worker-1 worker-2
 node src/cli.js team stop auth-team
 node src/cli.js team cleanup auth-team
+node src/cli.js dashboard -C /path/to/repository --port 4173
 ```
 
 To make `otx` available locally while developing:
@@ -85,6 +87,7 @@ otx run "Your task"
 | `otx team integrate <name> [worker ...]` | Validate and cherry-pick completed worker commits |
 | `otx team stop <name>` | Safely stop panes after validating ownership |
 | `otx team cleanup <name>` | Remove only stopped, clean, integrated worker worktrees and branches |
+| `otx dashboard [-C repo]` | Start the repository-scoped live Team dashboard on `127.0.0.1` |
 
 Useful options include `--workers 1..6`, `--mode conservative|balanced|aggressive`, `--model`, `--cwd`, `--read-only`, `--json`, and `--dry-run`.
 
@@ -98,6 +101,11 @@ The dashboard mode also starts an isolated local app-server supervisor. When the
 lead spawns a native child agent, the supervisor discovers its thread and opens
 a read-only tmux pane named with the child's nickname and role.
 
+`otx dashboard` is the durable Team control plane. It streams `.git/otx/team`
+state over SSE, captures owned worker panes, and exposes only repository-scoped
+start, stop, message, task assignment, integration, and worker membership
+actions. It does not expose arbitrary shell execution.
+
 ## Durable team runtime
 
 `otx team` is the heavier execution surface for changes that need independent
@@ -107,10 +115,15 @@ Team metadata and worker results are stored under the repository's Git common
 directory at `.git/otx/team/<team>/`, so they remain available from every
 worktree without dirtying the project checkout.
 
-The first release uses static role lanes and requires a clean leader checkout.
-Workers must finish with a new commit and clean worktree. The leader reviews and
-cherry-picks accepted commits; `team stop` closes only panes whose team, worker,
-run ID, and original pane PID still match the persisted ownership record.
+Unless a fixed role descriptor such as `3:executor` or `--no-plan` is used,
+Team starts with a read-only structured TraeX planner. Its JSON plan is schema-
+validated before any worktree is created. Invalid planner output falls back to
+the static role lanes and records the fallback reason in team config.
+
+Team creation requires a clean leader checkout. Write workers must finish with
+a new commit and clean worktree. The leader reviews and cherry-picks accepted
+commits; `team stop` closes only panes whose team, worker, run ID, and original
+pane PID still match the persisted ownership record.
 
 Long-lived workers can receive durable messages or explicit follow-up tasks on
 their original TraeX session. Team membership can grow or shrink at runtime;

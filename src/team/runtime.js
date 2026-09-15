@@ -5,14 +5,15 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { buildLeaderPrompt, buildWorkerPrompt } from './prompt.js';
+import { planTeam } from './planner.js';
 import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, removeTeamWorker, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState } from './state.js';
 import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktree, createWorkerWorktrees, inspectWorkerWorktree, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
 
-export function startTeam({ cwd, task, workerCount, model, teamName, baseRole, env = process.env, run = spawnSync }) {
+export async function startTeam({ cwd, task, workerCount, model, teamName, baseRole, autoPlan = true, plannerTimeoutMs, env = process.env, run = spawnSync }) {
   if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team requires running inside tmux.');
   const name = teamName ? sanitizeTeamName(teamName) : defaultTeamName(task);
   const roles = ['executor', 'test-engineer', 'reviewer', 'explorer', 'architect'];
-  const workers = Array.from({ length: workerCount }, (_, index) => ({
+  let workers = Array.from({ length: workerCount }, (_, index) => ({
     name: `worker-${index + 1}`,
     index: index + 1,
     role: baseRole || roles[index % roles.length],
@@ -25,6 +26,19 @@ export function startTeam({ cwd, task, workerCount, model, teamName, baseRole, e
   const repoRoot = repoRootResult.stdout.trim();
   assertCleanWorkspace(repoRoot);
   assertTeamDoesNotExist(repoRoot, name);
+  let plan = null;
+  let plannerFallback = null;
+  let planningMode = 'static';
+  if (autoPlan && !baseRole) {
+    try {
+      plan = await planTeam({ cwd: repoRoot, task, workerCount, model, timeoutMs: plannerTimeoutMs });
+      workers = materializePlannedWorkers(plan.workers);
+      planningMode = 'structured';
+    } catch (error) {
+      plannerFallback = error.message;
+      planningMode = 'fallback';
+    }
+  }
   const worktreeWorkers = createWorkerWorktrees({ repoRoot, teamName: name, workers });
   const leaderSessionId = randomUUID();
   let stateDir;
@@ -35,6 +49,9 @@ export function startTeam({ cwd, task, workerCount, model, teamName, baseRole, e
       name,
       task,
       model,
+      plan,
+      planningMode,
+      plannerFallback,
       leaderPaneId: env.TMUX_PANE,
       leaderSessionId,
       workers: worktreeWorkers,
@@ -49,6 +66,7 @@ export function startTeam({ cwd, task, workerCount, model, teamName, baseRole, e
 
   try {
     for (const worker of worktreeWorkers) {
+      worker.team_state_dir = stateDir;
       const workerDir = join(stateDir, 'workers', worker.name);
       mkdirSync(workerDir, { recursive: true });
       const promptPath = join(workerDir, 'prompt.md');
@@ -93,6 +111,8 @@ export function teamStatus(cwd, name, run = spawnSync) {
   state.workers = state.workers.map((worker) => {
     const paneAlive = paneOwnedBy(run, worker, state.config);
     const heartbeatAgeMs = worker.heartbeat_at ? Math.max(0, Date.now() - Date.parse(worker.heartbeat_at)) : null;
+    const activityAt = worker.last_activity_at || worker.child_started_at || worker.started_at;
+    const activityAgeMs = activityAt ? Math.max(0, Date.now() - Date.parse(activityAt)) : null;
     const health = worker.status === 'completed'
       ? 'completed'
       : worker.status === 'failed' || worker.status === 'cancelled'
@@ -101,6 +121,8 @@ export function teamStatus(cwd, name, run = spawnSync) {
           ? 'dead'
           : heartbeatAgeMs !== null && heartbeatAgeMs > 30_000
             ? 'stale'
+            : worker.status === 'working' && activityAgeMs !== null && activityAgeMs > 60_000
+              ? 'stalled'
             : 'healthy';
     const startupGrace = worker.status === 'starting'
       && Date.now() - Date.parse(worker.updated_at || state.config.created_at) < 10_000;
@@ -125,6 +147,7 @@ export function teamStatus(cwd, name, run = spawnSync) {
       dirty: worktreeStatus(worker.worktree_path) !== '',
       health,
       heartbeat_age_ms: heartbeatAgeMs,
+      activity_age_ms: activityAgeMs,
     };
   });
   if (state.config.status === 'running' && state.workers.every((worker) => ['completed', 'failed'].includes(worker.status))) {
@@ -245,6 +268,7 @@ export function diagnoseTeam(cwd, name) {
       health: worker.health,
       pane_alive: worker.pane_alive,
       heartbeat_age_ms: worker.heartbeat_age_ms,
+      activity_age_ms: worker.activity_age_ms,
       child_pid: worker.child_pid ?? null,
       current_task_id: worker.current_task_id ?? null,
       current_message_id: worker.current_message_id ?? null,
@@ -514,6 +538,14 @@ function assignmentFor(role, count, task) {
   };
   const instruction = lanes[role] || `Execute the objective as the ${role} specialist in a bounded, independently integrable lane.`;
   return `${instruction} Team size: ${count}. Objective: ${task}`;
+}
+
+function materializePlannedWorkers(plannedWorkers) {
+  const taskIdBySymbol = new Map(plannedWorkers.map((worker) => [worker.planner_id, String(worker.index)]));
+  return plannedWorkers.map((worker) => ({
+    ...worker,
+    depends_on: worker.depends_on_symbols.map((symbol) => taskIdBySymbol.get(symbol)),
+  }));
 }
 
 function shellJoin(parts) {

@@ -3,6 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from './args.js';
 import { buildOrchestratorPrompt } from './prompt.js';
 import { roleCatalog } from './roles.js';
@@ -25,6 +26,7 @@ Usage:
   otx team add-worker <team-name> <role> "assignment"
   otx team remove-worker <team-name> <worker>
   otx team integrate <team-name> [worker ...]
+  otx dashboard [-C repository] [--port 4173] [--poll-ms 1000]
   otx roles
   otx doctor
 
@@ -47,6 +49,7 @@ Examples:
 export async function main(argv = process.argv.slice(2)) {
   try {
     if (argv[0] === 'team') return await runTeamCommand(argv.slice(1));
+    if (argv[0] === 'dashboard') return runLiveDashboard(argv.slice(1));
     const { command, task, options } = parseArgs(argv);
     if (options.help || command === 'help') return print(HELP);
     if (command === 'roles') return print(roleCatalog());
@@ -107,6 +110,16 @@ export async function main(argv = process.argv.slice(2)) {
     process.stderr.write(`otx: ${error.message}\n`);
     return 1;
   }
+}
+
+function runLiveDashboard(argv) {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    return print('Usage: otx dashboard [-C repository] [--port 4173] [--poll-ms 1000]');
+  }
+  const server = fileURLToPath(new URL('../dashboard-prototype/live-server.js', import.meta.url));
+  const result = spawnSync(process.execPath, [server, ...argv], { stdio: 'inherit' });
+  if (result.error) throw result.error;
+  return result.status ?? 1;
 }
 
 function doctor() {

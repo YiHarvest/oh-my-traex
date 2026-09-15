@@ -7,7 +7,7 @@ const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 const TEAM_HELP = `oh-my-traex durable team runtime
 
 Usage:
-  otx team [N:role] [--name NAME] [--model MODEL] [-C DIR] "task"
+  otx team [N:role] [--name NAME] [--model MODEL] [--no-plan] [--planner-timeout-ms N] [-C DIR] "task"
   otx team list [-C DIR] [--json]
   otx team status|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose <name> [-C DIR]
@@ -115,18 +115,25 @@ export function parseTeamArgs(args) {
     else if (token === '--model' || token === '-m') options.model = requireValue(tokens, ++index, token);
     else if (token === '--cwd' || token === '-C') options.cwd = requireValue(tokens, ++index, token);
     else if (token === '--dry-run') options.dryRun = true;
+    else if (token === '--no-plan') options.autoPlan = false;
+    else if (token === '--planner-timeout-ms') options.plannerTimeoutMs = Number(requireValue(tokens, ++index, token));
+    else if (token.startsWith('--planner-timeout-ms=')) options.plannerTimeoutMs = Number(token.slice(21));
     else if (token.startsWith('-')) throw new Error(`Unknown team option: ${token}`);
     else taskParts.push(token);
   }
   if (!Number.isInteger(options.workers) || options.workers < 1 || options.workers > 6) {
     throw new Error('team workers must be an integer from 1 to 6.');
   }
+  if (options.plannerTimeoutMs !== undefined
+    && (!Number.isInteger(options.plannerTimeoutMs) || options.plannerTimeoutMs < 1000)) {
+    throw new Error('--planner-timeout-ms must be an integer of at least 1000.');
+  }
   const task = taskParts.join(' ').trim();
   if (!task) throw new Error('Usage: otx team [N:role] [options] "task"');
   return { subcommand, task, options };
 }
 
-export function runTeamCommand(args) {
+export async function runTeamCommand(args) {
   if (args.includes('--help') || args.includes('-h')) {
     process.stdout.write(`${TEAM_HELP}\n`);
     return 0;
@@ -195,15 +202,22 @@ export function runTeamCommand(args) {
     return 0;
   }
 
-  const runtime = startTeam({
+  const runtime = await startTeam({
     cwd,
     task: parsed.task,
     workerCount: parsed.options.workers,
     model: parsed.options.model,
     teamName: parsed.options.name,
     baseRole: parsed.options.role,
+    autoPlan: parsed.options.autoPlan !== false,
+    plannerTimeoutMs: parsed.options.plannerTimeoutMs,
   });
   process.stdout.write(`otx team started: ${runtime.name}\nstate: ${runtime.stateDir}\n`);
+  if (runtime.config.planning_mode === 'fallback') {
+    process.stdout.write(`otx team planner fallback: ${runtime.config.planner_fallback}\n`);
+  } else {
+    process.stdout.write(`planning: ${runtime.config.planning_mode}\n`);
+  }
   const leaderArgs = [
     '--no-alt-screen', '--session-id', runtime.config.leader_session_id,
     '-C', runtime.config.cwd, '--sandbox', 'workspace-write', runtime.leaderPrompt,

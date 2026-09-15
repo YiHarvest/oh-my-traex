@@ -9,6 +9,9 @@ Your role: ${worker.role}
 Your bounded assignment:
 ${worker.assignment}
 
+Task dependencies: ${(worker.depends_on || []).join(', ') || 'none'}
+Team state directory: ${worker.team_state_dir || 'provided by the runtime'}
+
 Rules:
 1. Work only inside your assigned Git worktree.
 2. Inspect repository instructions before changing files.
@@ -17,12 +20,13 @@ Rules:
 5. ${worker.requires_commit ? 'Commit all intended changes to your worker branch with a descriptive message.' : 'This is a read-oriented lane. Do not change files unless essential; if you do, commit every intended change.'}
 6. In your final response, report your summary, changed files, commit if any, and verification evidence.
 7. Do not merge, rebase, modify another worker's worktree, or alter team state.
+8. For dependency review, read upstream task JSON/results and inspect shared Git commits with git show; do not assume upstream files exist in your worktree.
 </otx_team_worker>`;
 }
 
 export function buildLeaderPrompt({ teamName, task, stateDir, workers, cliPath }) {
   const workerLines = workers.map((worker) =>
-    `- ${worker.name} [${worker.role}] branch=${worker.branch}: ${worker.assignment}`,
+    `- ${worker.name} [${worker.role}] branch=${worker.branch} depends_on=${(worker.depends_on || []).join(',') || 'none'} files=${(worker.file_paths || []).join(',') || 'unspecified'}: ${worker.assignment}`,
   ).join('\n');
   return `<otx_team_leader>
 You are the integration leader for independent TraeX team "${teamName}".

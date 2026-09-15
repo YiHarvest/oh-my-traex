@@ -41,7 +41,7 @@ export function assertTeamDoesNotExist(cwd, name) {
   }
 }
 
-export function initTeamState({ cwd, name, task, model, leaderPaneId, leaderSessionId, workers }) {
+export function initTeamState({ cwd, name, task, model, plan, planningMode, plannerFallback, leaderPaneId, leaderSessionId, workers }) {
   const stateDir = teamStateDir(cwd, name);
   if (existsSync(join(stateDir, 'config.json'))) throw new Error(`team already exists: ${name}`);
   mkdirSync(join(stateDir, 'workers'), { recursive: true });
@@ -53,6 +53,9 @@ export function initTeamState({ cwd, name, task, model, leaderPaneId, leaderSess
     run_id: randomUUID(),
     task,
     model: model || null,
+    plan: plan || null,
+    planning_mode: planningMode || 'static',
+    planner_fallback: plannerFallback || null,
     cwd: resolve(cwd),
     status: 'running',
     created_at: new Date().toISOString(),
@@ -71,8 +74,10 @@ export function initTeamState({ cwd, name, task, model, leaderPaneId, leaderSess
       description: worker.assignment,
       owner: worker.name,
       role: worker.role,
+      planner_id: worker.planner_id || null,
+      file_paths: worker.file_paths || [],
       requires_commit: worker.requires_commit,
-      depends_on: [],
+      depends_on: worker.depends_on || [],
       status: 'pending',
       version: 1,
       created_at: new Date().toISOString(),

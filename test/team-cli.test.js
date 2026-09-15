@@ -11,6 +11,12 @@ test('parses team worker descriptor and options', () => {
   assert.equal(parsed.task, 'ship auth');
 });
 
+test('parses static no-plan team mode', () => {
+  const parsed = parseTeamArgs(['--no-plan', '--workers', '2', 'task']);
+  assert.equal(parsed.options.autoPlan, false);
+  assert.equal(parsed.options.workers, 2);
+});
+
 test('parses team lifecycle subcommands', () => {
   const parsed = parseTeamArgs(['await', 'auth-team', '--timeout-ms', '5000']);
   assert.equal(parsed.subcommand, 'await');
@@ -81,8 +87,8 @@ test('parses dynamic worker membership commands', () => {
   assert.equal(removed.worker, 'worker-4');
 });
 
-test('team help does not require a task or repository', () => {
-  assert.equal(runTeamCommand(['--help']), 0);
+test('team help does not require a task or repository', async () => {
+  assert.equal(await runTeamCommand(['--help']), 0);
 });
 
 test('rejects unsafe team worker counts', () => {

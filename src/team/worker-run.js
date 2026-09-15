@@ -5,17 +5,18 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { claimTeamTask, completeClaimedTask, readMailbox, renewTaskClaim, updateMailboxMessage, updateWorkerState } from './state.js';
+import { projectTrustArgs } from './trae.js';
 
 const [stateDir, workerName, worktreePath, promptPath, resultPath, sessionId, model = ''] = process.argv.slice(2);
 const initialState = JSON.parse(readFileSync(join(stateDir, 'workers', `${workerName}.json`), 'utf8'));
 const initialTaskId = String(initialState.initial_task_id || initialState.index);
-updateWorkerState(stateDir, workerName, { status: 'working', started_at: new Date().toISOString(), pid: process.pid });
-const initialClaim = claimTeamTask(stateDir, initialTaskId, workerName);
-if (!initialClaim.ok) throw new Error(`failed to claim initial task: ${initialClaim.error}`);
+updateWorkerState(stateDir, workerName, { status: 'starting', started_at: new Date().toISOString(), pid: process.pid });
+const initialClaim = await waitForInitialClaim();
 let activeClaim = { taskId: initialTaskId, token: initialClaim.token };
+updateWorkerState(stateDir, workerName, { status: 'working', blocked_task_ids: [] });
 
 let activeSessionId = sessionId;
-let child = launchTrae(['exec', '--json', '--skip-git-repo-check', '-C', worktreePath, '--sandbox', 'workspace-write', '--session-id', sessionId, '--output-last-message', resultPath], readFileSync(promptPath, 'utf8'));
+let child = launchTrae(['exec', '--json', '--skip-git-repo-check', '-C', worktreePath, ...projectTrustArgs(worktreePath), '--sandbox', 'workspace-write', '--session-id', sessionId, '--output-last-message', resultPath], readFileSync(promptPath, 'utf8'));
 const heartbeat = setInterval(() => {
   updateWorkerState(stateDir, workerName, { heartbeat_at: new Date().toISOString() });
   if (activeClaim) renewTaskClaim(stateDir, activeClaim.taskId, workerName, activeClaim.token);
@@ -94,12 +95,19 @@ while (true) {
   const followupBaseCommit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: worktreePath, encoding: 'utf8' }).stdout.trim();
   const followupStartState = JSON.parse(readFileSync(join(stateDir, 'workers', workerName + '.json'), 'utf8'));
   const followupPath = join(stateDir, 'workers', workerName, `followup-${message.id}.md`);
-  const followupArgs = ['exec', 'resume', '--json', '--output-last-message', followupPath];
+  const followupArgs = ['exec', 'resume', '--json', ...projectTrustArgs(worktreePath), '--output-last-message', followupPath];
   if (model) followupArgs.push('--model', model);
   followupArgs.push(activeSessionId, message.body);
   child = spawn('traex', followupArgs, { cwd: worktreePath, stdio: ['inherit', 'pipe', 'inherit'] });
   attachJsonOutput(child);
-  updateWorkerState(stateDir, workerName, { child_pid: child.pid, heartbeat_at: new Date().toISOString(), session_id: activeSessionId });
+  const followupStartedAt = new Date().toISOString();
+  updateWorkerState(stateDir, workerName, {
+    child_pid: child.pid,
+    child_started_at: followupStartedAt,
+    last_activity_at: followupStartedAt,
+    heartbeat_at: followupStartedAt,
+    session_id: activeSessionId,
+  });
   const followupExit = await waitForChild(child);
   const latestMessage = readMailbox(stateDir, workerName).messages.find((item) => item.id === message.id);
   if (latestMessage?.status === 'cancelled') {
@@ -196,7 +204,13 @@ function launchTrae(baseArgs, prompt) {
   args.push(prompt);
   const processHandle = spawn('traex', args, { cwd: worktreePath, stdio: ['inherit', 'pipe', 'inherit'] });
   attachJsonOutput(processHandle);
-  updateWorkerState(stateDir, workerName, { child_pid: processHandle.pid, heartbeat_at: new Date().toISOString() });
+  const startedAt = new Date().toISOString();
+  updateWorkerState(stateDir, workerName, {
+    child_pid: processHandle.pid,
+    child_started_at: startedAt,
+    last_activity_at: startedAt,
+    heartbeat_at: startedAt,
+  });
   return processHandle;
 }
 
@@ -207,9 +221,14 @@ function attachJsonOutput(processHandle) {
     try {
       event = JSON.parse(line);
     } catch {
+      updateWorkerState(stateDir, workerName, { last_activity_at: new Date().toISOString(), last_event_type: 'output' });
       process.stdout.write(`${line}\n`);
       return;
     }
+    updateWorkerState(stateDir, workerName, {
+      last_activity_at: new Date().toISOString(),
+      last_event_type: event.type || 'event',
+    });
     if (event.type === 'thread.started' && event.thread_id) {
       activeSessionId = event.thread_id;
       updateWorkerState(stateDir, workerName, { session_id: activeSessionId });
@@ -231,4 +250,20 @@ function waitForChild(processHandle) {
     processHandle.once('error', () => resolve(1));
     processHandle.once('close', (code) => resolve(code ?? 1));
   });
+}
+
+async function waitForInitialClaim() {
+  while (true) {
+    const claimed = claimTeamTask(stateDir, initialTaskId, workerName);
+    if (claimed.ok) return claimed;
+    if (claimed.error !== 'blocked_dependency') {
+      throw new Error(`failed to claim initial task: ${claimed.error}`);
+    }
+    updateWorkerState(stateDir, workerName, {
+      status: 'blocked',
+      blocked_task_ids: claimed.dependencies,
+      heartbeat_at: new Date().toISOString(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
 }
