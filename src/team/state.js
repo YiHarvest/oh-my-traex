@@ -41,7 +41,7 @@ export function assertTeamDoesNotExist(cwd, name) {
   }
 }
 
-export function initTeamState({ cwd, name, task, leaderPaneId, leaderSessionId, workers }) {
+export function initTeamState({ cwd, name, task, model, leaderPaneId, leaderSessionId, workers }) {
   const stateDir = teamStateDir(cwd, name);
   if (existsSync(join(stateDir, 'config.json'))) throw new Error(`team already exists: ${name}`);
   mkdirSync(join(stateDir, 'workers'), { recursive: true });
@@ -52,16 +52,18 @@ export function initTeamState({ cwd, name, task, leaderPaneId, leaderSessionId, 
     name,
     run_id: randomUUID(),
     task,
+    model: model || null,
     cwd: resolve(cwd),
     status: 'running',
     created_at: new Date().toISOString(),
     leader_pane_id: leaderPaneId,
     leader_session_id: leaderSessionId,
     workers: workers.map(({ name: workerName }) => workerName),
+    next_worker_index: workers.length + 1,
   };
   writeJsonAtomic(join(stateDir, 'config.json'), config);
   for (const worker of workers) {
-    writeJsonAtomic(workerStatePath(stateDir, worker.name), worker);
+    writeJsonAtomic(workerStatePath(stateDir, worker.name), { ...worker, initial_task_id: String(worker.index) });
     mkdirSync(mailboxDir(stateDir, worker.name), { recursive: true });
     writeJsonAtomic(taskStatePath(stateDir, String(worker.index)), {
       id: String(worker.index),
@@ -185,6 +187,42 @@ export function updateTeamConfig(stateDir, updates) {
   const next = { ...current, ...updates, updated_at: new Date().toISOString() };
   writeJsonAtomic(path, next);
   return next;
+}
+
+export function addTeamWorker(stateDir, worker) {
+  const configPath = join(stateDir, 'config.json');
+  const config = readJson(configPath);
+  if (config.workers.includes(worker.name)) throw new Error(`worker already exists: ${worker.name}`);
+  writeJsonAtomic(workerStatePath(stateDir, worker.name), worker);
+  mkdirSync(mailboxDir(stateDir, worker.name), { recursive: true });
+  const task = createTeamTask(stateDir, {
+    subject: worker.assignment,
+    description: worker.assignment,
+    owner: worker.name,
+    role: worker.role,
+    requires_commit: worker.requires_commit,
+  });
+  writeJsonAtomic(workerStatePath(stateDir, worker.name), { ...worker, initial_task_id: task.id });
+  writeJsonAtomic(configPath, {
+    ...config,
+    workers: [...config.workers, worker.name],
+    next_worker_index: Math.max(config.next_worker_index || 1, worker.index + 1),
+    status: 'running',
+    updated_at: new Date().toISOString(),
+  });
+  return task;
+}
+
+export function removeTeamWorker(stateDir, workerName) {
+  const configPath = join(stateDir, 'config.json');
+  const config = readJson(configPath);
+  if (!config.workers.includes(workerName)) throw new Error(`worker not found: ${workerName}`);
+  writeJsonAtomic(configPath, {
+    ...config,
+    workers: config.workers.filter((name) => name !== workerName),
+    status: config.workers.length === 1 ? 'empty' : config.status,
+    updated_at: new Date().toISOString(),
+  });
 }
 
 export function workerStatePath(stateDir, workerName) {

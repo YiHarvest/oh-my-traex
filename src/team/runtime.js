@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { buildLeaderPrompt, buildWorkerPrompt } from './prompt.js';
-import { assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState } from './state.js';
-import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktrees, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
+import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, removeTeamWorker, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState } from './state.js';
+import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktree, createWorkerWorktrees, inspectWorkerWorktree, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
 
 export function startTeam({ cwd, task, workerCount, model, teamName, baseRole, env = process.env, run = spawnSync }) {
   if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team requires running inside tmux.');
@@ -34,6 +34,7 @@ export function startTeam({ cwd, task, workerCount, model, teamName, baseRole, e
       cwd: repoRoot,
       name,
       task,
+      model,
       leaderPaneId: env.TMUX_PANE,
       leaderSessionId,
       workers: worktreeWorkers,
@@ -111,7 +112,7 @@ export function teamStatus(cwd, name, run = spawnSync) {
         pane_alive: false,
         dirty: worktreeStatus(worker.worktree_path) !== '',
       });
-      updateTaskState(state.stateDir, String(worker.index), {
+      updateTaskState(state.stateDir, worker.initial_task_id || String(worker.index), {
         status: 'failed',
         error: failed.error,
         completed_at: failed.completed_at,
@@ -127,8 +128,15 @@ export function teamStatus(cwd, name, run = spawnSync) {
     };
   });
   if (state.config.status === 'running' && state.workers.every((worker) => ['completed', 'failed'].includes(worker.status))) {
+    const producedWorkers = state.workers
+      .filter((worker) => worker.requires_commit && worker.commit && worker.commit !== worker.base_commit);
+    const integrationCurrent = producedWorkers.length > 0
+      && producedWorkers.every((worker) => ['integrated', 'already_integrated'].includes(worker.integration?.status)
+        && worker.integration?.commit === worker.commit);
     state.config = updateTeamConfig(state.stateDir, {
-      status: state.workers.some((worker) => worker.status === 'failed') ? 'failed' : 'ready',
+      status: state.workers.some((worker) => worker.status === 'failed')
+        ? 'failed'
+        : integrationCurrent ? 'integrated' : 'ready',
       completed_at: new Date().toISOString(),
     });
   }
@@ -160,8 +168,20 @@ export function stopTeam(cwd, name, run = spawnSync) {
         updateMailboxMessage(state.stateDir, worker.name, worker.current_message_id, {
           status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
         });
+        if (worker.current_task_id) updateTaskState(state.stateDir, worker.current_task_id, {
+          status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
+        });
+      } else if (worker.status === 'queued') {
+        for (const message of readMailbox(state.stateDir, worker.name).messages.filter((item) => item.status === 'pending')) {
+          updateMailboxMessage(state.stateDir, worker.name, message.id, {
+            status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
+          });
+          if (message.task_id) updateTaskState(state.stateDir, message.task_id, {
+            status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
+          });
+        }
       } else {
-        updateTaskState(state.stateDir, String(worker.index), {
+        updateTaskState(state.stateDir, worker.initial_task_id || String(worker.index), {
           status: 'cancelled', error: 'stopped by team leader', completed_at: stoppedAt,
         });
       }
@@ -178,7 +198,9 @@ export function sendTeamMessage(cwd, name, workerName, message) {
   if (!worker) throw new Error(`worker not found: ${workerName}`);
   if (!worker.pane_alive) throw new Error(`worker is not running: ${workerName}`);
   const created = enqueueMailboxMessage(state.stateDir, workerName, message);
-  updateWorkerState(state.stateDir, workerName, { status: 'queued', current_message_id: created.id, integration: null });
+  updateWorkerState(state.stateDir, workerName, {
+    status: worker.status === 'working' ? 'working' : 'queued',
+  });
   updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
   return created;
 }
@@ -189,7 +211,9 @@ export function broadcastTeamMessage(cwd, name, message) {
   if (workers.length === 0) throw new Error(`team has no running workers: ${name}`);
   const messages = workers.map((worker) => {
     const created = enqueueMailboxMessage(state.stateDir, worker.name, message);
-    updateWorkerState(state.stateDir, worker.name, { status: 'queued', current_message_id: created.id, integration: null });
+    updateWorkerState(state.stateDir, worker.name, {
+      status: worker.status === 'working' ? 'working' : 'queued',
+    });
     return { worker: worker.name, message: created };
   });
   updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
@@ -245,12 +269,7 @@ export function assignTeamTask(cwd, name, workerName, description) {
   });
   const body = `New OTX team task ${task.id}: ${description} Follow your existing worker contract, verify the result, and ${worker.requires_commit ? 'commit all intended changes.' : 'avoid changes unless essential.'}`;
   const message = enqueueTaskMessage(state.stateDir, workerName, task.id, body);
-  updateWorkerState(state.stateDir, workerName, {
-    status: 'queued',
-    current_message_id: message.id,
-    current_task_id: task.id,
-    integration: null,
-  });
+  updateWorkerState(state.stateDir, workerName, { status: 'queued' });
   updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
   return { task, message };
 }
@@ -356,6 +375,92 @@ export function cleanupTeam(cwd, name) {
   return { ok: complete, results };
 }
 
+export function addWorker(cwd, name, role, assignment, { model, env = process.env, run = spawnSync } = {}) {
+  if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team add-worker requires running inside tmux.');
+  const state = teamStatus(cwd, name, run);
+  if (['stopped', 'cleaned', 'cleanup_pending'].includes(state.config.status)) {
+    throw new Error(`cannot add a worker to team in status ${state.config.status}`);
+  }
+  if (state.workers.length >= 6) throw new Error('team already has the maximum of 6 workers.');
+  assertCleanWorkspace(state.config.cwd);
+  const index = state.config.next_worker_index || Math.max(0, ...state.workers.map((worker) => worker.index)) + 1;
+  const workerBase = {
+    name: `worker-${index}`,
+    index,
+    role,
+    assignment,
+    requires_commit: ['executor', 'test-engineer'].includes(role),
+    status: 'starting',
+  };
+  const worker = createWorkerWorktree({ repoRoot: state.config.cwd, teamName: name, worker: workerBase });
+  let task;
+  let paneId = null;
+  let membershipAdded = false;
+  try {
+    task = addTeamWorker(state.stateDir, worker);
+    membershipAdded = true;
+    worker.initial_task_id = task.id;
+    const workerDir = join(state.stateDir, 'workers', worker.name);
+    mkdirSync(workerDir, { recursive: true });
+    const promptPath = join(workerDir, 'prompt.md');
+    const resultPath = join(workerDir, 'result.md');
+    const sessionId = randomUUID();
+    writeFileSync(promptPath, buildWorkerPrompt({ teamName: name, worker, task: assignment }), 'utf8');
+    const runner = join(dirname(fileURLToPath(import.meta.url)), 'worker-run.js');
+    const command = shellJoin([process.execPath, runner, state.stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, model || state.config.model || '']);
+    const split = run('tmux', ['split-window', '-v', '-d', '-P', '-F', '#{pane_id}', '-t', env.TMUX_PANE, '-c', worker.worktree_path, command], { cwd: state.config.cwd, encoding: 'utf8' });
+    if (split.status !== 0) throw new Error(String(split.stderr || 'failed to create worker pane').trim());
+    paneId = split.stdout.trim().split('\n')[0];
+    if (!paneId.startsWith('%')) throw new Error('tmux did not return a worker pane ID.');
+    runTmuxOrThrow(run, ['set-option', '-p', '-t', paneId, '@otx_team', name]);
+    runTmuxOrThrow(run, ['set-option', '-p', '-t', paneId, '@otx_worker', worker.name]);
+    runTmuxOrThrow(run, ['set-option', '-p', '-t', paneId, '@otx_run_id', state.config.run_id]);
+    run('tmux', ['select-pane', '-t', paneId, '-T', `${worker.name} [${worker.role}]`], { encoding: 'utf8' });
+    const panePid = readPanePid(run, paneId);
+    const updated = updateWorkerState(state.stateDir, worker.name, {
+      initial_task_id: task.id,
+      pane_id: paneId,
+      pane_pid: panePid,
+      session_id: sessionId,
+      result_path: resultPath,
+      prompt_path: promptPath,
+    });
+    run('tmux', ['select-layout', '-t', env.TMUX_PANE, 'main-vertical'], { encoding: 'utf8' });
+    return { worker: updated, task };
+  } catch (error) {
+    if (paneId?.startsWith('%')) run('tmux', ['kill-pane', '-t', paneId], { encoding: 'utf8' });
+    if (task) updateTaskState(state.stateDir, task.id, {
+      status: 'failed', error: error.message, completed_at: new Date().toISOString(),
+    });
+    updateWorkerState(state.stateDir, worker.name, {
+      status: 'failed', error: error.message, completed_at: new Date().toISOString(),
+    });
+    if (membershipAdded) removeTeamWorker(state.stateDir, worker.name);
+    const cleanupDebt = rollbackWorkerWorktrees(state.config.cwd, [worker]);
+    if (cleanupDebt.length > 0) updateTeamConfig(state.stateDir, { cleanup_debt: cleanupDebt });
+    throw error;
+  }
+}
+
+export function removeWorker(cwd, name, workerName, run = spawnSync) {
+  const state = teamStatus(cwd, name, run);
+  const worker = state.workers.find((candidate) => candidate.name === workerName);
+  if (!worker) throw new Error(`worker not found: ${workerName}`);
+  if (['starting', 'queued', 'working'].includes(worker.status)) throw new Error(`worker is busy: ${workerName}`);
+  const producedCommit = Boolean(worker.commit && worker.commit !== worker.base_commit);
+  const integrated = ['integrated', 'already_integrated'].includes(worker.integration?.status) || !producedCommit;
+  if (!integrated) throw new Error(`worker commit is not integrated: ${workerName}`);
+  const worktreeInspection = inspectWorkerWorktree(worker);
+  if (!worktreeInspection.ok) throw new Error(`worker cleanup refused: ${worktreeInspection.reason}`);
+  const paneInspection = inspectPaneOwnership(run, worker, state.config);
+  if (paneInspection === 'mismatch') throw new Error(`worker pane ownership could not be verified: ${workerName}`);
+  if (paneInspection === 'owned') run('tmux', ['kill-pane', '-t', worker.pane_id], { encoding: 'utf8' });
+  const cleanup = cleanupWorkerWorktree(state.config.cwd, worker);
+  if (cleanup.status !== 'removed') throw new Error(`worker cleanup refused: ${cleanup.reason}`);
+  removeTeamWorker(state.stateDir, workerName);
+  return { worker: workerName, status: 'removed', cleanup };
+}
+
 export function resumeTeam(cwd, name, { model, env = process.env, run = spawnSync } = {}) {
   if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team resume requires running inside tmux.');
   const state = readTeamState(cwd, name);
@@ -367,13 +472,18 @@ export function resumeTeam(cwd, name, { model, env = process.env, run = spawnSyn
 }
 
 function paneOwnedBy(run, workerState, config) {
+  return inspectPaneOwnership(run, workerState, config) === 'owned';
+}
+
+function inspectPaneOwnership(run, workerState, config) {
   const paneId = workerState.pane_id;
-  if (!paneId?.startsWith('%')) return false;
+  if (!paneId?.startsWith('%')) return 'missing';
   const result = run('tmux', ['display-message', '-p', '-t', paneId, '#{@otx_team}\t#{@otx_worker}\t#{@otx_run_id}\t#{pane_pid}\t#{pane_dead}'], { encoding: 'utf8' });
-  if (result.status !== 0) return false;
+  if (result.status !== 0) return 'missing';
   const [team, worker, runId, panePid, dead] = result.stdout.trim().split('\t');
-  return team === config.name && worker === workerState.name && runId === config.run_id
+  const owned = team === config.name && worker === workerState.name && runId === config.run_id
     && Number(panePid) === workerState.pane_pid && dead === '0';
+  return owned ? 'owned' : 'mismatch';
 }
 
 function readPanePid(run, paneId) {

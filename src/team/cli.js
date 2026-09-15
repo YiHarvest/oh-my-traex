@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { assignTeamTask, awaitTeam, broadcastTeamMessage, cleanupTeam, diagnoseTeam, integrateTeam, listTasks, readTeamMailbox, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
+import { addWorker, assignTeamTask, awaitTeam, broadcastTeamMessage, cleanupTeam, diagnoseTeam, integrateTeam, listTasks, readTeamMailbox, removeWorker, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
 import { listTeamStates } from './state.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
@@ -11,6 +11,8 @@ Usage:
   otx team list [-C DIR] [--json]
   otx team status|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose <name> [-C DIR]
+  otx team add-worker <name> <role> [-C DIR] -- "assignment"
+  otx team remove-worker <name> <worker> [-C DIR]
   otx team assign <name> <worker> [-C DIR] -- "task"
   otx team send <name> <worker> [-C DIR] -- "message"
   otx team broadcast <name> [-C DIR] -- "message"
@@ -19,7 +21,7 @@ Usage:
 
 export function parseTeamArgs(args) {
   const tokens = [...args];
-  const subcommand = ['list', 'tasks', 'assign', 'diagnose', 'status', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
+  const subcommand = ['list', 'tasks', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'status', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
   const options = { workers: 3, cwd: process.cwd(), timeoutMs: 3_600_000 };
   if (subcommand === 'list') {
     parseOptions(tokens, options);
@@ -38,6 +40,21 @@ export function parseTeamArgs(args) {
     const description = parseMessageAndOptions(tokens, options);
     if (!name || !worker || !description) throw new Error('Usage: otx team assign <team> <worker> "task"');
     return { subcommand, name, worker, description, options };
+  }
+  if (subcommand === 'add-worker') {
+    const name = tokens.shift();
+    const role = tokens.shift();
+    const assignment = parseMessageAndOptions(tokens, options);
+    if (!name || !role || !assignment) throw new Error('Usage: otx team add-worker <team> <role> "assignment"');
+    if (!/^[a-z][a-z0-9-]*$/i.test(role)) throw new Error(`invalid worker role: ${role}`);
+    return { subcommand, name, role, assignment, options };
+  }
+  if (subcommand === 'remove-worker') {
+    const name = tokens.shift();
+    const worker = tokens.shift();
+    parseOptions(tokens, options);
+    if (!name || !worker) throw new Error('Usage: otx team remove-worker <team> <worker>');
+    return { subcommand, name, worker, options };
   }
   if (subcommand === 'broadcast') {
     const name = tokens.shift();
@@ -123,6 +140,14 @@ export function runTeamCommand(args) {
   }
   if (parsed.subcommand === 'assign') {
     process.stdout.write(`${JSON.stringify(assignTeamTask(cwd, parsed.name, parsed.worker, parsed.description), null, 2)}\n`);
+    return 0;
+  }
+  if (parsed.subcommand === 'add-worker') {
+    process.stdout.write(`${JSON.stringify(addWorker(cwd, parsed.name, parsed.role, parsed.assignment, { model: parsed.options.model }), null, 2)}\n`);
+    return 0;
+  }
+  if (parsed.subcommand === 'remove-worker') {
+    process.stdout.write(`${JSON.stringify(removeWorker(cwd, parsed.name, parsed.worker), null, 2)}\n`);
     return 0;
   }
   if (parsed.subcommand === 'broadcast') {

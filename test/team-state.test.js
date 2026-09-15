@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createTeamTask, enqueueMailboxMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState } from '../src/team/state.js';
+import { addTeamWorker, createTeamTask, enqueueMailboxMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, removeTeamWorker, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState } from '../src/team/state.js';
 
 test('persists team and worker state under the Git common directory', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-state-'));
@@ -60,6 +60,25 @@ test('allocates monotonic durable task IDs', () => {
     const created = createTeamTask(stateDir, { subject: 'next', description: 'next', owner: 'worker-1', role: 'explorer', requires_commit: false });
     assert.equal(created.id, '2');
     assert.deepEqual(listTeamTasks(stateDir).map((task) => task.id), ['1', '2']);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('adds and removes durable team membership without reusing worker indices', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-membership-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const first = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [first] });
+    const second = { name: 'worker-2', index: 2, status: 'starting', role: 'verifier', assignment: 'verify', requires_commit: false };
+    const task = addTeamWorker(stateDir, second);
+    assert.equal(task.id, '2');
+    removeTeamWorker(stateDir, 'worker-2');
+    const state = readTeamState(cwd, 'demo');
+    assert.deepEqual(state.config.workers, ['worker-1']);
+    assert.equal(state.config.next_worker_index, 3);
+    assert.deepEqual(state.tasks.map((item) => item.id), ['1', '2']);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

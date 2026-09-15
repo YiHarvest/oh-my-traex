@@ -43,6 +43,8 @@ node src/cli.js team broadcast auth-team "Re-run verification and report blocker
 node src/cli.js team tasks auth-team
 node src/cli.js team assign auth-team worker-1 "Implement another bounded change"
 node src/cli.js team diagnose auth-team
+node src/cli.js team add-worker auth-team verifier "Verify the integrated behavior"
+node src/cli.js team remove-worker auth-team worker-4
 node src/cli.js team integrate auth-team worker-1 worker-2
 node src/cli.js team stop auth-team
 node src/cli.js team cleanup auth-team
@@ -77,6 +79,8 @@ otx run "Your task"
 | `otx team tasks <name>` | List the durable task ledger |
 | `otx team assign <name> <worker> <task>` | Persist and dispatch a new task to a long-lived worker |
 | `otx team diagnose <name>` | Report pane, heartbeat, child PID, task, mailbox, and worktree health |
+| `otx team add-worker <name> <role> <assignment>` | Add an independent worker, worktree, task, session, and pane |
+| `otx team remove-worker <name> <worker>` | Remove an idle worker only when its work is clean and integrated |
 | `otx team integrate <name> [worker ...]` | Validate and cherry-pick completed worker commits |
 | `otx team stop <name>` | Safely stop panes after validating ownership |
 | `otx team cleanup <name>` | Remove only stopped, clean, integrated worker worktrees and branches |
@@ -106,6 +110,11 @@ The first release uses static role lanes and requires a clean leader checkout.
 Workers must finish with a new commit and clean worktree. The leader reviews and
 cherry-picks accepted commits; `team stop` closes only panes whose team, worker,
 run ID, and original pane PID still match the persisted ownership record.
+
+Long-lived workers can receive durable messages or explicit follow-up tasks on
+their original TraeX session. Team membership can grow or shrink at runtime;
+worker indices are monotonic and never reused within a team. Cleanup and removal
+preserve dirty or unintegrated worktrees instead of deleting recoverable work.
 
 ## Why this shape
 

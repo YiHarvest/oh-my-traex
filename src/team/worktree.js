@@ -30,6 +30,10 @@ export function createWorkerWorktrees({ repoRoot, teamName, workers }) {
   }
 }
 
+export function createWorkerWorktree({ repoRoot, teamName, worker }) {
+  return createWorkerWorktrees({ repoRoot, teamName, workers: [worker] })[0];
+}
+
 export function rollbackWorkerWorktrees(repoRoot, workers) {
   const preserved = [];
   for (const worker of [...workers].reverse()) {
@@ -67,16 +71,22 @@ export function worktreeStatus(path) {
 }
 
 export function cleanupWorkerWorktree(repoRoot, worker) {
-  const head = git(worker.worktree_path, ['rev-parse', 'HEAD']);
-  const status = git(worker.worktree_path, ['status', '--porcelain']);
-  if (head.status !== 0) return { status: 'preserved', reason: 'worktree_unreadable' };
-  if (status.status !== 0 || status.stdout.trim() !== '') return { status: 'preserved', reason: 'worktree_dirty' };
-  if (worker.commit && head.stdout.trim() !== worker.commit) return { status: 'preserved', reason: 'worktree_head_changed' };
+  const inspection = inspectWorkerWorktree(worker);
+  if (!inspection.ok) return { status: 'preserved', reason: inspection.reason };
   const removed = git(repoRoot, ['worktree', 'remove', worker.worktree_path]);
   if (removed.status !== 0) return { status: 'preserved', reason: commandError(removed) };
   const branch = git(repoRoot, ['branch', '-D', worker.branch]);
   if (branch.status !== 0) return { status: 'preserved', reason: commandError(branch) };
   return { status: 'removed', worktree_path: worker.worktree_path, branch: worker.branch };
+}
+
+export function inspectWorkerWorktree(worker) {
+  const head = git(worker.worktree_path, ['rev-parse', 'HEAD']);
+  const status = git(worker.worktree_path, ['status', '--porcelain']);
+  if (head.status !== 0) return { ok: false, reason: 'worktree_unreadable' };
+  if (status.status !== 0 || status.stdout.trim() !== '') return { ok: false, reason: 'worktree_dirty' };
+  if (worker.commit && head.stdout.trim() !== worker.commit) return { ok: false, reason: 'worktree_head_changed' };
+  return { ok: true };
 }
 
 function git(cwd, args) {

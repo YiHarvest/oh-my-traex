@@ -8,8 +8,9 @@ import { readMailbox, updateMailboxMessage, updateTaskState, updateWorkerState }
 
 const [stateDir, workerName, worktreePath, promptPath, resultPath, sessionId, model = ''] = process.argv.slice(2);
 const initialState = JSON.parse(readFileSync(join(stateDir, 'workers', `${workerName}.json`), 'utf8'));
+const initialTaskId = String(initialState.initial_task_id || initialState.index);
 updateWorkerState(stateDir, workerName, { status: 'working', started_at: new Date().toISOString(), pid: process.pid });
-updateTaskState(stateDir, String(initialState.index), { status: 'in_progress', started_at: new Date().toISOString() });
+updateTaskState(stateDir, initialTaskId, { status: 'in_progress', started_at: new Date().toISOString() });
 
 let activeSessionId = sessionId;
 let child = launchTrae(['exec', '--json', '--skip-git-repo-check', '-C', worktreePath, '--sandbox', 'workspace-write', '--session-id', sessionId, '--output-last-message', resultPath], readFileSync(promptPath, 'utf8'));
@@ -60,7 +61,7 @@ updateWorkerState(stateDir, workerName, {
           : 'worker produced no result'
     : null,
 });
-updateTaskState(stateDir, String(initialState.index), {
+updateTaskState(stateDir, initialTaskId, {
   status: finalStatus,
   completed_at: new Date().toISOString(),
   commit: commitSha,
@@ -77,6 +78,8 @@ while (true) {
   updateMailboxMessage(stateDir, workerName, message.id, { status: 'working', started_at: new Date().toISOString() });
   updateWorkerState(stateDir, workerName, { status: 'working', current_message_id: message.id, current_task_id: message.task_id });
   if (message.task_id) updateTaskState(stateDir, message.task_id, { status: 'in_progress', started_at: new Date().toISOString() });
+  const followupBaseCommit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: worktreePath, encoding: 'utf8' }).stdout.trim();
+  const followupStartState = JSON.parse(readFileSync(join(stateDir, 'workers', workerName + '.json'), 'utf8'));
   const followupPath = join(stateDir, 'workers', workerName, `followup-${message.id}.md`);
   const followupArgs = ['exec', 'resume', '--json', '--output-last-message', followupPath];
   if (model) followupArgs.push('--model', model);
@@ -94,19 +97,36 @@ while (true) {
   spawnSync('git', ['reset', '--mixed', 'HEAD'], { cwd: worktreePath, stdio: 'ignore' });
   const followupCommit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: worktreePath, encoding: 'utf8' });
   const followupDirty = spawnSync('git', ['status', '--porcelain'], { cwd: worktreePath, encoding: 'utf8' });
-  const followupStatus = followupExit === 0 && followupDirty.status === 0 && followupDirty.stdout.trim() === '' ? 'completed' : 'failed';
+  const followupCommitSha = followupCommit.status === 0 ? followupCommit.stdout.trim() : null;
+  const followupTask = message.task_id
+    ? JSON.parse(readFileSync(join(stateDir, 'tasks', 'task-' + message.task_id + '.json'), 'utf8'))
+    : null;
+  const followupCommitSatisfied = followupTask?.requires_commit ? followupCommitSha !== followupBaseCommit : true;
+  const followupHasResult = existsSync(followupPath) && statSync(followupPath).size > 0;
+  const followupStatus = followupExit === 0
+    && followupDirty.status === 0
+    && followupDirty.stdout.trim() === ''
+    && followupCommitSatisfied
+    && followupHasResult
+    ? 'completed'
+    : 'failed';
   updateMailboxMessage(stateDir, workerName, message.id, {
     status: followupStatus,
     completed_at: new Date().toISOString(),
     result_path: followupPath,
-    commit: followupCommit.status === 0 ? followupCommit.stdout.trim() : null,
-    error: followupStatus === 'failed' ? `follow-up exited ${followupExit}` : null,
+    commit: followupCommitSha,
+    error: followupStatus === 'failed'
+      ? followupExit !== 0 ? `follow-up exited ${followupExit}`
+        : !followupCommitSatisfied ? 'follow-up task produced no commit'
+          : !followupHasResult ? 'follow-up produced no result'
+            : 'follow-up worktree is dirty'
+      : null,
   });
   if (message.task_id) {
     updateTaskState(stateDir, message.task_id, {
       status: followupStatus,
       completed_at: new Date().toISOString(),
-      commit: followupCommit.status === 0 ? followupCommit.stdout.trim() : null,
+      commit: followupCommitSha,
       result_path: followupPath,
       error: followupStatus === 'failed' ? `follow-up exited ${followupExit}` : null,
     });
@@ -115,7 +135,8 @@ while (true) {
     status: followupStatus,
     current_message_id: null,
     current_task_id: null,
-    commit: followupCommit.status === 0 ? followupCommit.stdout.trim() : null,
+    commit: followupCommitSha,
+    integration: followupCommitSha !== followupBaseCommit ? null : followupStartState.integration,
     completed_at: new Date().toISOString(),
   });
 }

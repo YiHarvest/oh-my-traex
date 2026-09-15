@@ -71,6 +71,15 @@ test('parses team cleanup command', () => {
   assert.equal(parsed.options.cwd, '/repo');
 });
 
+test('parses dynamic worker membership commands', () => {
+  const added = parseTeamArgs(['add-worker', 'auth-team', 'verifier', '-C', '/repo', '--', 'verify', 'release']);
+  assert.equal(added.role, 'verifier');
+  assert.equal(added.assignment, 'verify release');
+  assert.equal(added.options.cwd, '/repo');
+  const removed = parseTeamArgs(['remove-worker', 'auth-team', 'worker-4', '-C', '/repo']);
+  assert.equal(removed.worker, 'worker-4');
+});
+
 test('team help does not require a task or repository', () => {
   assert.equal(runTeamCommand(['--help']), 0);
 });
