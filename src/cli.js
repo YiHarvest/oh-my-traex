@@ -16,7 +16,7 @@ Usage:
   otx prompt [options] "task"
   otx team [N:role] [options] "task"
   otx team list
-  otx team status|await|resume|stop <team-name>
+  otx team status|await|resume|stop|cleanup <team-name>
   otx team send <team-name> <worker> "message"
   otx team broadcast <team-name> "message"
   otx team tasks <team-name>
@@ -114,6 +114,12 @@ function doctor() {
 
   const version = spawnSync('traex', ['--version'], { encoding: 'utf8' });
   checks.push(['TraeX on PATH', version.status === 0, (version.stdout || version.stderr).trim() || 'not found']);
+
+  const git = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  checks.push(['Git on PATH', git.status === 0, (git.stdout || git.stderr).trim() || 'not found']);
+
+  const tmux = spawnSync('tmux', ['-V'], { encoding: 'utf8' });
+  checks.push(['tmux on PATH', tmux.status === 0, (tmux.stdout || tmux.stderr).trim() || 'not found']);
 
   const features = spawnSync('traex', ['features', 'list'], { encoding: 'utf8' });
   const featureText = `${features.stdout || ''}\n${features.stderr || ''}`;

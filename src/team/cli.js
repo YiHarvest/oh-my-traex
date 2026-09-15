@@ -1,13 +1,25 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { assignTeamTask, awaitTeam, broadcastTeamMessage, diagnoseTeam, integrateTeam, listTasks, readTeamMailbox, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
+import { assignTeamTask, awaitTeam, broadcastTeamMessage, cleanupTeam, diagnoseTeam, integrateTeam, listTasks, readTeamMailbox, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
 import { listTeamStates } from './state.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
+const TEAM_HELP = `oh-my-traex durable team runtime
+
+Usage:
+  otx team [N:role] [--name NAME] [--model MODEL] [-C DIR] "task"
+  otx team list [-C DIR] [--json]
+  otx team status|await|resume|stop|cleanup <name> [-C DIR]
+  otx team tasks|diagnose <name> [-C DIR]
+  otx team assign <name> <worker> [-C DIR] -- "task"
+  otx team send <name> <worker> [-C DIR] -- "message"
+  otx team broadcast <name> [-C DIR] -- "message"
+  otx team mailbox <name> <worker> [-C DIR]
+  otx team integrate <name> [worker ...] [-C DIR]`;
 
 export function parseTeamArgs(args) {
   const tokens = [...args];
-  const subcommand = ['list', 'tasks', 'assign', 'diagnose', 'status', 'await', 'resume', 'stop', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
+  const subcommand = ['list', 'tasks', 'assign', 'diagnose', 'status', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
   const options = { workers: 3, cwd: process.cwd(), timeoutMs: 3_600_000 };
   if (subcommand === 'list') {
     parseOptions(tokens, options);
@@ -98,6 +110,10 @@ export function parseTeamArgs(args) {
 }
 
 export function runTeamCommand(args) {
+  if (args.includes('--help') || args.includes('-h')) {
+    process.stdout.write(`${TEAM_HELP}\n`);
+    return 0;
+  }
   const parsed = parseTeamArgs(args);
   const cwd = resolve(parsed.options.cwd);
   if (parsed.subcommand === 'list') return printTeams(listTeamStates(cwd), parsed.options.json);
@@ -127,6 +143,11 @@ export function runTeamCommand(args) {
   }
   if (parsed.subcommand === 'integrate') {
     const result = integrateTeam(cwd, parsed.name, parsed.workers);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result.ok ? 0 : 1;
+  }
+  if (parsed.subcommand === 'cleanup') {
+    const result = cleanupTeam(cwd, parsed.name);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return result.ok ? 0 : 1;
   }

@@ -45,6 +45,7 @@ node src/cli.js team assign auth-team worker-1 "Implement another bounded change
 node src/cli.js team diagnose auth-team
 node src/cli.js team integrate auth-team worker-1 worker-2
 node src/cli.js team stop auth-team
+node src/cli.js team cleanup auth-team
 ```
 
 To make `otx` available locally while developing:
@@ -78,6 +79,7 @@ otx run "Your task"
 | `otx team diagnose <name>` | Report pane, heartbeat, child PID, task, mailbox, and worktree health |
 | `otx team integrate <name> [worker ...]` | Validate and cherry-pick completed worker commits |
 | `otx team stop <name>` | Safely stop panes after validating ownership |
+| `otx team cleanup <name>` | Remove only stopped, clean, integrated worker worktrees and branches |
 
 Useful options include `--workers 1..6`, `--mode conservative|balanced|aggressive`, `--model`, `--cwd`, `--read-only`, `--json`, and `--dry-run`.
 

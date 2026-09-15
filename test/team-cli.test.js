@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseTeamArgs } from '../src/team/cli.js';
+import { parseTeamArgs, runTeamCommand } from '../src/team/cli.js';
 
 test('parses team worker descriptor and options', () => {
   const parsed = parseTeamArgs(['2:executor', '--name', 'auth-team', '--model', 'GPT-5.6-Sol', 'ship', 'auth']);
@@ -63,6 +63,16 @@ test('parses team diagnose command', () => {
   const parsed = parseTeamArgs(['diagnose', 'auth-team', '-C', '/repo']);
   assert.equal(parsed.name, 'auth-team');
   assert.equal(parsed.options.cwd, '/repo');
+});
+
+test('parses team cleanup command', () => {
+  const parsed = parseTeamArgs(['cleanup', 'auth-team', '-C', '/repo']);
+  assert.equal(parsed.name, 'auth-team');
+  assert.equal(parsed.options.cwd, '/repo');
+});
+
+test('team help does not require a task or repository', () => {
+  assert.equal(runTeamCommand(['--help']), 0);
 });
 
 test('rejects unsafe team worker counts', () => {

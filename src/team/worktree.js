@@ -66,6 +66,19 @@ export function worktreeStatus(path) {
   return result.status === 0 ? result.stdout.trim() : 'unknown';
 }
 
+export function cleanupWorkerWorktree(repoRoot, worker) {
+  const head = git(worker.worktree_path, ['rev-parse', 'HEAD']);
+  const status = git(worker.worktree_path, ['status', '--porcelain']);
+  if (head.status !== 0) return { status: 'preserved', reason: 'worktree_unreadable' };
+  if (status.status !== 0 || status.stdout.trim() !== '') return { status: 'preserved', reason: 'worktree_dirty' };
+  if (worker.commit && head.stdout.trim() !== worker.commit) return { status: 'preserved', reason: 'worktree_head_changed' };
+  const removed = git(repoRoot, ['worktree', 'remove', worker.worktree_path]);
+  if (removed.status !== 0) return { status: 'preserved', reason: commandError(removed) };
+  const branch = git(repoRoot, ['branch', '-D', worker.branch]);
+  if (branch.status !== 0) return { status: 'preserved', reason: commandError(branch) };
+  return { status: 'removed', worktree_path: worker.worktree_path, branch: worker.branch };
+}
+
 function git(cwd, args) {
   return spawnSync('git', args, { cwd, encoding: 'utf8' });
 }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { initTeamState, updateWorkerState } from '../src/team/state.js';
-import { integrateTeam } from '../src/team/runtime.js';
+import { cleanupTeam, integrateTeam, stopTeam } from '../src/team/runtime.js';
 import { createWorkerWorktrees } from '../src/team/worktree.js';
 
 test('integrates the complete validated worker commit range', () => {
@@ -22,6 +22,7 @@ test('integrates the complete validated worker commit range', () => {
     teamName: 'demo',
     workers: [{ name: 'worker-1', index: 1, role: 'executor', assignment: 'task', requires_commit: true, status: 'starting' }],
   });
+  let cleaned = false;
   try {
     writeFileSync(join(workers[0].worktree_path, 'one.txt'), 'one\n');
     git(workers[0].worktree_path, ['add', 'one.txt']);
@@ -44,9 +45,16 @@ test('integrates the complete validated worker commit range', () => {
     const repeated = integrateTeam(repoRoot, 'demo', ['worker-1']);
     assert.equal(repeated.ok, true);
     assert.equal(repeated.results[0].status, 'already_integrated');
+    stopTeam(repoRoot, 'demo');
+    const cleanup = cleanupTeam(repoRoot, 'demo');
+    assert.equal(cleanup.ok, true);
+    assert.equal(cleanup.results[0].status, 'removed');
+    cleaned = true;
   } finally {
-    git(repoRoot, ['worktree', 'remove', '--force', workers[0].worktree_path]);
-    git(repoRoot, ['branch', '-D', workers[0].branch]);
+    if (!cleaned) {
+      git(repoRoot, ['worktree', 'remove', '--force', workers[0].worktree_path]);
+      git(repoRoot, ['branch', '-D', workers[0].branch]);
+    }
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(bucket, { recursive: true, force: true });
   }

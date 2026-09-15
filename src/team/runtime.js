@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { buildLeaderPrompt, buildWorkerPrompt } from './prompt.js';
 import { assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState } from './state.js';
-import { assertCleanWorkspace, createWorkerWorktrees, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
+import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktrees, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
 
 export function startTeam({ cwd, task, workerCount, model, teamName, baseRole, env = process.env, run = spawnSync }) {
   if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team requires running inside tmux.');
@@ -322,6 +322,38 @@ export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
   }
   updateTeamConfig(state.stateDir, { status: 'integrated', integrated_at: new Date().toISOString(), integration_results: results });
   return { ok: true, results };
+}
+
+export function cleanupTeam(cwd, name) {
+  const state = teamStatus(cwd, name);
+  if (state.config.status !== 'stopped') throw new Error('team must be stopped before cleanup.');
+  const results = [];
+  for (const worker of state.workers) {
+    if (worker.pane_alive) {
+      results.push({ worker: worker.name, status: 'preserved', reason: 'pane_alive' });
+      continue;
+    }
+    if (worker.dirty) {
+      results.push({ worker: worker.name, status: 'preserved', reason: 'worktree_dirty' });
+      continue;
+    }
+    const producedCommit = Boolean(worker.commit && worker.commit !== worker.base_commit);
+    const integrated = ['integrated', 'already_integrated'].includes(worker.integration?.status)
+      || !producedCommit;
+    if (!integrated) {
+      results.push({ worker: worker.name, status: 'preserved', reason: 'commit_not_integrated', commit: worker.commit });
+      continue;
+    }
+    const cleaned = cleanupWorkerWorktree(state.config.cwd, worker);
+    results.push({ worker: worker.name, ...cleaned });
+  }
+  const complete = results.every((result) => result.status === 'removed');
+  updateTeamConfig(state.stateDir, {
+    status: complete ? 'cleaned' : 'cleanup_pending',
+    cleanup_at: new Date().toISOString(),
+    cleanup_results: results,
+  });
+  return { ok: complete, results };
 }
 
 export function resumeTeam(cwd, name, { model, env = process.env, run = spawnSync } = {}) {
