@@ -1,157 +1,185 @@
+<div align="center">
+
 # oh-my-traex
 
-`oh-my-traex` provides two multi-agent execution surfaces for TraeX: a lightweight
-native-child mode and a durable independent-process team runtime inspired by
-`oh-my-codex`.
+**为 TraeX 补上真正可观察、可恢复的多 Agent 运行时。**
 
-The native `otx run` surface follows a small, auditable contract:
+一套受 `oh-my-codex` 启发的 TraeX 原生编排层：保留轻量原生 children，同时提供独立进程、独立 pane、独立 session、独立 worktree 和持久化任务状态。
 
-- a lead agent owns decomposition, integration, verification, and the final answer;
-- at most 1-6 child agents run concurrently;
-- built-in role mappings cover exploration, architecture, implementation, testing, and review;
-- workers receive bounded scopes and may not recursively delegate;
-- concurrent writers must own different files or modules;
-- TraeX keeps control of sessions, permissions, tools, and child-agent lifecycle.
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-339933?logo=node.js&logoColor=white)](package.json)
+[![TraeX](https://img.shields.io/badge/TraeX-multi__agent-3b82f6)](https://www.trae.ai/)
+[![Tests](https://img.shields.io/badge/tests-54%20passing-22c55e)](#开发与验证)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Requirements
+[快速开始](#体验当前版本) · [架构](#系统架构) · [Dashboard](#实时-dashboard) · [命令参考](#命令参考) · [English](README.en.md)
 
-- Node.js 22 or newer (the supervisor uses Node's built-in WebSocket client)
-- `traex` available on `PATH`
-- TraeX features `multi_agent` and `multi_agent_v2` enabled
-- permission for TraeX to write its own user/session state directory (normally `~/.trae`)
+</div>
 
-Check the environment:
+> **当前状态：** `main` 提供 `otx run` 原生子 Agent 编排和 `otx team` 持久化独立 worker 两条执行路径。Team runtime 已覆盖结构化规划、任务 DAG、claim lease、mailbox、动态扩缩容、安全集成与清理；Web Dashboard 通过本地 REST/SSE 控制面实时展示和操作这些状态。
 
-```bash
-npm run doctor
-```
+## 系统架构
 
-## Use from the repository
+<a href="assets/oh-my-traex-architecture.html"><img src="assets/oh-my-traex-architecture.png" alt="oh-my-traex 架构：操作者通过 OTX CLI 或 Live Dashboard 驱动 Team runtime；任务、claim、lease 和 mailbox 持久化到 Git common state；独立 TraeX workers 在隔离 worktree 中执行，并可继续调用原生 TraeX children。"></a>
+
+> 架构图由 [Archify](assets/oh-my-traex-architecture.html) 生成。点击图片可打开支持搜索、聚焦、主题切换和导出的交互版本；源规范见 [`docs/oh-my-traex.architecture.json`](docs/oh-my-traex.architecture.json)。
+
+## 体验当前版本
+
+需要 Node.js 22+、Git、tmux，以及 PATH 中可用的 `traex`。
 
 ```bash
-node src/cli.js run "Implement login rate limiting and tests"
-node src/cli.js run --ui dashboard "Implement login rate limiting and tests"
-node src/cli.js run -n 3 --mode conservative "Audit the authorization layer"
-node src/cli.js prompt "Refactor the parser without changing behavior"
-node src/cli.js team 3:executor --name auth-team "Implement authentication and tests"
-node src/cli.js team --workers 3 --name planned-team "Implement and review authentication"
-node src/cli.js team list
-node src/cli.js team status auth-team
-node src/cli.js team await auth-team
-node src/cli.js team resume auth-team
-node src/cli.js team send auth-team worker-1 "Add an edge-case test and commit it"
-node src/cli.js team broadcast auth-team "Re-run verification and report blockers"
-node src/cli.js team tasks auth-team
-node src/cli.js team assign auth-team worker-1 "Implement another bounded change"
-node src/cli.js team assign auth-team worker-2 --depends-on 2 "Verify task 2"
-node src/cli.js team diagnose auth-team
-node src/cli.js team add-worker auth-team verifier "Verify the integrated behavior"
-node src/cli.js team remove-worker auth-team worker-4
-node src/cli.js team integrate auth-team worker-1 worker-2
-node src/cli.js team stop auth-team
-node src/cli.js team cleanup auth-team
-node src/cli.js dashboard -C /path/to/repository --port 4173
-```
-
-To make `otx` available locally while developing:
-
-```bash
+git clone https://github.com/YiHarvest/oh-my-traex.git
+cd oh-my-traex
 npm link
 otx doctor
-otx run "Your task"
 ```
 
-`otx run` uses TraeX's `workspace-write` sandbox by default. Use `--read-only` for analysis and review tasks. It never enables bypass-permissions mode. The sandbox governs project access; TraeX still needs access to its own user state directory to initialize a session.
+启动轻量原生 children 编排：
 
-## Commands
+```bash
+otx run -n 3 --mode balanced "Review this repository and implement the approved fixes"
+```
 
-| Command | Purpose |
-| --- | --- |
-| `otx run <task>` | Start a non-interactive TraeX lead with the orchestration contract |
-| `otx prompt <task>` | Print the generated lead prompt for inspection or reuse |
-| `otx roles` | List the built-in role mappings |
-| `otx doctor` | Verify Node, TraeX, and native multi-agent features |
-| `otx team [N:role] <task>` | Start independent TraeX workers in tmux and dedicated Git worktrees |
-| `otx team list` | List persisted teams in the current Git repository |
-| `otx team status <name>` | Show durable worker, pane, worktree, commit, and result state |
-| `otx team await <name>` | Wait until every worker reaches a terminal state |
-| `otx team resume <name>` | Resume the persisted TraeX leader session |
-| `otx team send <name> <worker> <message>` | Queue a durable follow-up for one worker session |
-| `otx team broadcast <name> <message>` | Queue the same follow-up for all workers |
-| `otx team mailbox <name> <worker>` | Inspect persisted follow-up delivery/results |
-| `otx team tasks <name>` | List the durable task ledger |
-| `otx team assign <name> <worker> <task>` | Persist and dispatch a new task to a long-lived worker |
-| `otx team diagnose <name>` | Report pane, heartbeat, child PID, task, mailbox, and worktree health |
-| `otx team add-worker <name> <role> <assignment>` | Add an independent worker, worktree, task, session, and pane |
-| `otx team remove-worker <name> <worker>` | Remove an idle worker only when its work is clean and integrated |
-| `otx team integrate <name> [worker ...]` | Validate and cherry-pick completed worker commits |
-| `otx team stop <name>` | Safely stop panes after validating ownership |
-| `otx team cleanup <name>` | Remove only stopped, clean, integrated worker worktrees and branches |
-| `otx dashboard [-C repo]` | Start the repository-scoped live Team dashboard on `127.0.0.1` |
+在 tmux 中启动持久化 Team：
 
-Useful options include `--workers 1..6`, `--mode conservative|balanced|aggressive`, `--model`, `--cwd`, `--read-only`, `--json`, and `--dry-run`.
+```bash
+otx team --workers 3 --name release-team "Implement, test, and review the release"
+```
 
-`--ui dashboard` must be launched from inside tmux. It starts the lead through
-TraeX's shared dashboard/app-server control plane in the current pane and opens
-a second dashboard as a live session monitor. This mode is interactive and does
-not support `--json`; without `--ui dashboard`, `otx run` keeps its original
-non-interactive `traex exec` behavior.
+启动仓库级实时控制台：
 
-The dashboard mode also starts an isolated local app-server supervisor. When the
-lead spawns a native child agent, the supervisor discovers its thread and opens
-a read-only tmux pane named with the child's nickname and role.
+```bash
+otx dashboard -C /path/to/repository --port 4173
+# open http://127.0.0.1:4173
+```
 
-`otx dashboard` is the durable Team control plane. It streams `.git/otx/team`
-state over SSE, captures owned worker panes, and exposes only repository-scoped
-start, stop, message, task assignment, integration, and worker membership
-actions. It does not expose arbitrary shell execution.
+## 核心想法
 
-## Durable team runtime
+TraeX 已经有原生 child agents，但复杂工程任务还需要另一层运行时保证：子任务不能只存在于当前对话上下文里，worker 需要独立窗口和 Git 边界，任务交接需要持久化，崩溃后仍要知道谁拥有什么、做到了哪一步。
 
-`otx team` is the heavier execution surface for changes that need independent
-workers. Each first-level worker receives its own TraeX process, tmux pane,
-session ID, branch, and Git worktree under `../<repo>.otx-worktrees/<team>/`.
-Team metadata and worker results are stored under the repository's Git common
-directory at `.git/otx/team/<team>/`, so they remain available from every
-worktree without dirtying the project checkout.
+oh-my-traex 因此保留两个层次：
 
-Unless a fixed role descriptor such as `3:executor` or `--no-plan` is used,
-Team starts with a read-only structured TraeX planner. Its JSON plan is schema-
-validated before any worktree is created. Invalid planner output falls back to
-the static role lanes and records the fallback reason in team config.
+1. `otx run` 使用 TraeX 原生 children，适合低成本、同会话的并行探索。
+2. `otx team` 启动独立 TraeX 进程；每个一级 worker 拥有自己的 tmux pane、session、branch 和 worktree。
+3. Team worker 仍可在内部使用原生 TraeX children，形成“持久一级 worker + 轻量二级子 Agent”的结构。
+4. Leader 负责拆分、所有权、验证和最终集成，不把共享分支写权限交给 worker。
 
-Team creation requires a clean leader checkout. Write workers must finish with
-a new commit and clean worktree. The leader reviews and cherry-picks accepted
-commits; `team stop` closes only panes whose team, worker, run ID, and original
-pane PID still match the persisted ownership record.
+## 为什么不只用原生 children？
 
-Long-lived workers can receive durable messages or explicit follow-up tasks on
-their original TraeX session. Team membership can grow or shrink at runtime;
-worker indices are monotonic and never reused within a team. Cleanup and removal
-preserve dirty or unintegrated worktrees instead of deleting recoverable work.
+| 能力 | `otx run` | `otx team` |
+|---|---|---|
+| 运行单元 | TraeX 原生 child thread | 独立 TraeX 进程与 session |
+| 可见性 | TraeX session / 可选 tmux viewer | 每个 worker 独立 tmux pane + Web Dashboard |
+| 文件隔离 | 共享工作区，由 prompt 约束 | 独立 Git branch 与 worktree |
+| 状态持久化 | 依赖 TraeX session | `.git/otx/team/<team>/` |
+| 后续任务 | 新 child 或当前会话协调 | 原 session mailbox resume |
+| 依赖编排 | Leader prompt | 持久化 DAG、claim 和 lease |
+| 恢复与诊断 | TraeX 原生能力 | pane、PID、heartbeat、activity、task、mailbox、Git 状态 |
+| 最适合 | 探索、评审、小型并行任务 | 长任务、并行实现、可恢复交付 |
 
-Assigned tasks may declare dependencies with `--depends-on`. Workers claim a
-ready task under a cross-process lock and receive a lease token; completion is
-accepted only from the worker holding that token. Blocked tasks stay queued
-until all dependency task records reach `completed`.
+两者不是替代关系。`otx run` 保持轻，`otx team` 提供 `oh-my-codex` 风格的耐久编排。
 
-Task records carry monotonic versions, claim leases, dependency and blocker
-fields, result paths, commits, and errors. Expired leases can be reclaimed;
-workers renew active leases from their heartbeat loop. A blocked item never
-prevents the same long-lived worker from processing later ready messages.
+## 实时 Dashboard
 
-## Why this shape
+Dashboard 是 Team runtime 的本地控制面，而不是模拟器或任意命令终端。它只监听 `127.0.0.1`，绑定一个明确的 Git 仓库，并提供受限动作：
 
-`otx run` uses TraeX native children for inexpensive in-session fanout. `otx team`
-uses independent TraeX processes and worktrees for durable, coarse-grained
-parallel execution. A team worker may still use native TraeX children internally,
-giving OTX the same two-level execution model that makes OMX useful: durable
-first-level workers plus lightweight nested subagents.
+- 通过 SSE 实时更新 Team、Task、worker、heartbeat、activity、mailbox 和终端输出；
+- 按 Team 分组浏览任务，点击 worker 即切换对应 pane 的输出；
+- 发送同 session follow-up，或创建带 `depends_on` 的持久化任务；
+- 动态增加独立 worker，并明确选择 role 与 assignment；
+- 根据 runtime 状态启用或禁用操作；
+- 停止 Team 前展示受影响 worker 和未完成任务，并要求二次确认；
+- 将“进程仍活着但 TraeX 长时间无事件”显示为 `stalled`，避免假健康；
+- 支持 `J/K` 切换任务、`[/]` 切换 worker、`1/2` 切换 inspector、`M` 发消息、`A` 分配任务、`?` 查看快捷键。
 
-## Development
+Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查确实属于 `otx-web-<team>` 后清理对应 tmux session。
+
+## 当前源码提供什么
+
+| 已交付能力 | 验证证据 |
+|---|---|
+| 原生 child orchestration | 有界 fan-out、角色约束、leader 集成 contract 测试 |
+| 独立 Team workers | 真实 tmux pane、TraeX session、branch 和 worktree E2E |
+| 结构化规划 | JSON schema、role、路径、DAG cycle 和写入所有权验证 |
+| 持久化任务协调 | 原子 task records、跨进程 claim、lease 续租/回收、依赖解锁测试 |
+| 长驻 mailbox | 同 session follow-up、显式任务派发和结果路径验证 |
+| 动态成员 | worker index 单调递增、安全 add/remove E2E |
+| 安全集成和清理 | commit range 校验、cherry-pick、pane ownership 与 dirty-worktree 防护 |
+| Live Dashboard | REST/SSE、真实 pane capture、状态动作、桌面/移动响应式验证 |
+| 健康诊断 | heartbeat、pane liveness、activity age 和 `stalled` 状态 |
+
+## Team 如何工作
+
+启动时，Team 先确认 leader checkout 干净，再执行以下流程：
+
+1. 结构化 planner 生成 worker roles、assignment、文件边界和 DAG；显式 `N:role` 或 `--no-plan` 可跳过规划。
+2. Runtime 为每个一级 worker 创建 branch、Git worktree、tmux pane 和 TraeX session。
+3. 状态写入 Git common directory 下的 `.git/otx/team/<team>/`，所有 worktree 可见但不会污染工作区。
+4. Worker 在依赖完成后 claim task，并通过 heartbeat 续租；过期 lease 可被安全回收。
+5. Leader 通过 mailbox 发送普通 follow-up，或创建新的持久化任务。
+6. 写入型 worker 必须产生干净 commit；leader 验证 commit range 后再选择集成。
+7. Stop 和 cleanup 在操作 pane、branch 或 worktree 前重新验证所有权与可恢复状态。
+
+状态目录示例：
+
+```text
+.git/otx/team/release-team/
+├── config.json
+├── tasks/
+│   ├── task-1.json
+│   └── task-2.json
+├── mailbox/
+│   └── worker-1/
+└── workers/
+    ├── worker-1.json
+    └── worker-1/
+        ├── prompt.md
+        ├── result.md
+        └── followup-<message-id>.md
+```
+
+## 命令参考
+
+| 命令 | 用途 |
+|---|---|
+| `otx run <task>` | 启动使用原生 children 的 TraeX leader |
+| `otx run --ui dashboard <task>` | 启动 TraeX app-server/session viewer 组合 |
+| `otx prompt <task>` | 输出 leader orchestration prompt |
+| `otx team [N:role] <task>` | 启动独立持久化 Team workers |
+| `otx team list` | 列出当前仓库的 Team |
+| `otx team status <name>` | 查看 worker、pane、worktree、commit 和结果 |
+| `otx team await <name>` | 等待所有 worker 进入终态 |
+| `otx team send <name> <worker> <message>` | 向原 worker session 投递 follow-up |
+| `otx team assign <name> <worker> [--depends-on IDs] <task>` | 创建并派发持久化任务 |
+| `otx team add-worker <name> <role> <assignment>` | 动态增加独立 worker |
+| `otx team remove-worker <name> <worker>` | 安全移除空闲且可回收的 worker |
+| `otx team diagnose <name>` | 查看 pane、PID、heartbeat、activity 和阻塞信息 |
+| `otx team integrate <name> [workers...]` | 验证并 cherry-pick worker commit range |
+| `otx team stop <name>` | 验证 pane ownership 后停止 Team |
+| `otx team cleanup <name>` | 清理已停止且安全的 branch/worktree |
+| `otx dashboard [-C repo]` | 启动仓库级 Live Team Dashboard |
+| `otx doctor` | 检查 Node、TraeX、Git、tmux 和 multi-agent feature |
+
+## 安全边界
+
+- 默认使用 TraeX `workspace-write`，不会自动启用 bypass-permissions。
+- Dashboard 只绑定 loopback，不开放任意 shell endpoint。
+- Worktree 信任仅通过 worker 进程级配置覆盖，不写入用户全局信任列表。
+- 所有 pane kill 都校验 team、worker、run ID 与原始 pane PID。
+- dirty 或未集成 worktree 不会被 cleanup 静默删除。
+- DAG claim 使用跨进程锁和 token；过期或错误 token 不能完成任务。
+
+## 开发与验证
 
 ```bash
 npm test
-node src/cli.js doctor
+npm run doctor
+npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"
 ```
+
+当前测试基线为 **54 passing**，并包含真实 tmux/TraeX Team、mailbox、DAG、动态成员、集成、清理和 Dashboard 响应式验证。
+
+## 许可证
+
+[MIT](LICENSE) © 2026-present [YiHarvest](https://github.com/YiHarvest)

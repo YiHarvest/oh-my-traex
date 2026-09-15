@@ -1,3 +1,5 @@
+import { actionAvailability, buildWorkerActionPayload, nextWrappedIndex, parseDependencyIds, summarizeRuntime } from './ui-model.js';
+
 const initialTasks = [
   {
     id: 1, title: 'Implement user authentication', status: 'working', created: '12m ago', model: 'gpt-5.3-codex',
@@ -83,7 +85,9 @@ const state = {
   tick: 0,
   mode: 'mock',
   connected: false,
-  liveSnapshot: null
+  liveSnapshot: null,
+  selectedWorkerByTeam: {},
+  actionMode: 'message'
 };
 
 const elements = {
@@ -100,12 +104,26 @@ const elements = {
   modal: document.getElementById('modal-backdrop'), form: document.getElementById('task-form'),
   formError: document.getElementById('form-error'), settings: document.getElementById('settings-panel'),
   density: document.getElementById('density-toggle'), completed: document.getElementById('completed-toggle'),
-  toast: document.getElementById('toast-region')
+  toast: document.getElementById('toast-region'), runtimeHud: document.getElementById('runtime-hud'),
+  hudTeam: document.getElementById('hud-team'), hudWorkers: document.getElementById('hud-workers'),
+  hudState: document.getElementById('hud-state'), hudUpdated: document.getElementById('hud-updated'),
+  runtimeState: document.getElementById('runtime-state'), notificationBadge: document.getElementById('notification-badge'),
+  messageButton: document.getElementById('message-button'), assignButton: document.getElementById('assign-button'),
+  stopButton: document.getElementById('stop-button'), addNodeButton: document.getElementById('add-node-button'), actionBackdrop: document.getElementById('action-backdrop'),
+  actionForm: document.getElementById('action-form'), actionEyebrow: document.getElementById('action-eyebrow'),
+  actionTitle: document.getElementById('action-title'), actionContext: document.getElementById('action-context'),
+  actionTargetLabel: document.getElementById('action-target-label'), actionWorker: document.getElementById('action-worker'), actionDependenciesRow: document.getElementById('action-dependencies-row'),
+  actionDependencies: document.getElementById('action-dependencies'), actionMessage: document.getElementById('action-message'),
+  actionError: document.getElementById('action-error'), actionSubmit: document.getElementById('action-submit'),
+  confirmBackdrop: document.getElementById('confirm-backdrop'), confirmCopy: document.getElementById('confirm-copy'),
+  shortcutsBackdrop: document.getElementById('shortcuts-backdrop')
 };
 elements.connectionLabel = document.getElementById('connection-label');
 elements.statusButton = document.getElementById('status-button');
 elements.orchestratorStatus = document.getElementById('orchestrator-status');
 elements.orchestratorModel = document.getElementById('orchestrator-model');
+elements.taskCount = document.getElementById('task-count');
+elements.activityCount = document.getElementById('activity-count');
 
 function currentTask() { return state.tasks.find(function (task) { return task.id === state.selectedTaskId; }) || state.tasks[0]; }
 function saveState() {
@@ -119,11 +137,25 @@ function label(status) { return status === 'complete' ? 'Completed' : status ===
 function now() { return new Date().toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
 
 function renderTaskList() {
-  elements.taskList.innerHTML = state.tasks.map(function (task) {
-    return '<button class="task-list-item ' + (task.id === state.selectedTaskId ? 'active' : '') + '" type="button" data-task-id="' + task.id + '">'
-      + '<span class="task-state-dot ' + task.status + '"></span><span class="task-list-copy"><strong>'
-      + escapeHtml(task.title) + '</strong><span>#' + task.id + ' · ' + label(task.status) + '</span></span></button>';
+  const groups = [];
+  state.tasks.forEach(function (task) {
+    const key = task.liveTeam || 'Local tasks';
+    let group = groups.find(function (item) { return item.key === key; });
+    if (!group) { group = { key: key, tasks: [] }; groups.push(group); }
+    group.tasks.push(task);
+  });
+  elements.taskList.innerHTML = groups.map(function (group) {
+    const team = state.liveSnapshot?.teams?.find(function (item) { return item.config.name === group.key; });
+    const badge = team ? team.config.status + ' · ' + team.workers.length : group.tasks.length + ' tasks';
+    return '<section class="task-group"><div class="task-group-head"><strong>' + escapeHtml(group.key) + '</strong><span>' + escapeHtml(badge) + '</span></div>'
+      + group.tasks.map(renderTaskListItem).join('') + '</section>';
   }).join('');
+}
+
+function renderTaskListItem(task) {
+  return '<button class="task-list-item ' + (task.id === state.selectedTaskId ? 'active' : '') + '" type="button" data-task-id="' + task.id + '">'
+    + '<span class="task-state-dot ' + task.status + '"></span><span class="task-list-copy"><strong>'
+    + escapeHtml(task.title) + '</strong><span>#' + escapeHtml(task.liveTaskId || task.id) + ' · ' + label(task.status) + '</span></span></button>';
 }
 
 function renderGraph(task) {
@@ -136,11 +168,11 @@ function renderGraph(task) {
 function renderAgents(task) {
   const agents = state.showCompleted ? task.agents : task.agents.filter(function (agent) { return agent.status !== 'complete'; });
   elements.agents.innerHTML = agents.map(function (agent) {
-    return '<article class="agent-card child-card ' + (agent.selected ? 'selected' : '') + '" data-agent-id="' + agent.id + '">'
+    return '<button class="agent-card child-card ' + (agent.selected ? 'selected' : '') + '" type="button" data-agent-id="' + agent.id + '" aria-pressed="' + String(Boolean(agent.selected)) + '">'
       + '<div class="agent-head"><div><div class="eyebrow">' + escapeHtml(agent.role) + '</div><h2>' + escapeHtml(agent.name) + '</h2></div>'
       + '<span class="status-chip ' + agent.status + '">' + (agent.status === 'working' ? '<span class="spinner"></span>' : '') + label(agent.status) + '</span></div>'
       + '<div class="agent-meta"><span>Model <strong>' + escapeHtml(task.model) + '</strong></span></div><p>' + escapeHtml(agent.detail) + '</p>'
-      + '<div class="agent-foot"><span>' + escapeHtml(agent.id) + '</span><span>' + escapeHtml(agent.elapsed) + '</span></div></article>';
+      + '<div class="agent-foot"><span>' + escapeHtml((agent.paneId || agent.id) + (agent.taskId ? ' · task:' + agent.taskId : '')) + '</span><span>' + escapeHtml(agent.elapsed) + '</span></div></button>';
   }).join('');
 }
 
@@ -178,9 +210,45 @@ function renderTask() {
   elements.summaryTokens.textContent = task.tokens;
   elements.summaryDuration.textContent = task.duration;
   elements.summaryCost.textContent = task.cost;
-  elements.terminalWorker.textContent = task.owner || task.agents.find(function (agent) { return agent.selected; })?.id || 'orchestrator';
+  elements.taskCount.textContent = String(task.checklist.length);
+  elements.activityCount.textContent = String(task.activity.length);
+  const focused = task.agents.find(function (agent) { return agent.selected; });
+  elements.terminalWorker.textContent = focused?.id || task.owner || 'orchestrator';
+  if (focused?.logs) task.logs = focused.logs;
+  elements.runtimeState.textContent = state.mode === 'live' ? task.teamStatus || label(task.status) : 'Preview';
+  renderActionState(task, focused);
+  renderHud(task);
   renderGraph(task); renderAgents(task); renderInspector(task); renderTerminal(task); renderTaskList();
   if (window.lucide) window.lucide.createIcons();
+}
+
+function renderHud(task) {
+  if (state.mode !== 'live' || !state.liveSnapshot) {
+    elements.hudTeam.textContent = 'preview';
+    elements.hudWorkers.textContent = task.agents.length + ' agents';
+    elements.hudState.textContent = label(task.status).toLowerCase();
+    elements.hudUpdated.textContent = 'local';
+    return;
+  }
+  const summary = summarizeRuntime(state.liveSnapshot);
+  elements.hudTeam.textContent = task.liveTeam ? 'team:' + task.liveTeam : 'team:—';
+  elements.hudWorkers.textContent = summary.workers + ' workers';
+  elements.hudState.textContent = summary.attention ? summary.attention + ' attention' : summary.running ? summary.running + ' running' : 'idle';
+  elements.hudState.className = summary.attention ? 'warning' : '';
+  elements.hudUpdated.textContent = 'updated:' + relativeTime(state.liveSnapshot.generated_at);
+  elements.notificationBadge.textContent = String(summary.attention);
+  elements.notificationBadge.hidden = summary.attention === 0;
+}
+
+function renderActionState(task, focused) {
+  const live = state.mode === 'live';
+  const availability = actionAvailability({ live: live, hasTeam: Boolean(task.liveTeam), focusedWorker: focused, teamStatus: live ? task.teamStatus : task.status });
+  elements.messageButton.disabled = !availability.message;
+  elements.assignButton.disabled = !availability.assign;
+  elements.stopButton.disabled = !availability.stop;
+  elements.addNodeButton.disabled = live ? !task.liveTeam || task.agents.length >= 6 || ['stopped', 'cleaned', 'empty'].includes(task.teamStatus) : task.agents.length >= 6;
+  elements.messageButton.title = focused ? 'Send a same-session follow-up to ' + focused.id + ' (M)' : 'Select a worker first';
+  elements.assignButton.title = focused ? 'Create a durable task for ' + focused.id + ' (A)' : 'Select a worker first';
 }
 
 function applyLiveSnapshot(snapshot) {
@@ -222,8 +290,13 @@ function mapLiveTeam(team) {
   const tasks = team.tasks.length ? team.tasks : [{ id: '0', subject: team.config.task, status: team.config.status }];
   return tasks.map(function (task) {
     const owner = team.workers.find(function (worker) { return worker.name === task.owner; });
+    const preferredWorker = state.selectedWorkerByTeam[team.config.name];
+    const selectedWorker = team.workers.some(function (worker) { return worker.name === preferredWorker; })
+      ? preferredWorker
+      : owner?.name || team.workers[0]?.name;
+    state.selectedWorkerByTeam[team.config.name] = selectedWorker;
     const workers = team.workers.map(function (worker) {
-      const selected = worker.name === task.owner;
+      const selected = worker.name === selectedWorker;
       return {
         id: worker.name,
         name: worker.name,
@@ -233,20 +306,28 @@ function mapLiveTeam(team) {
         elapsed: formatHeartbeat(worker),
         selected: selected,
         health: worker.health,
+        paneAlive: worker.pane_alive,
+        paneId: worker.pane_id,
+        taskId: worker.current_task_id || worker.initial_task_id,
+        updatedAt: worker.updated_at,
+        logs: worker.terminal_lines?.length
+          ? worker.terminal_lines.slice(-40).map(function (line) { return [timeFromIso(worker.updated_at || team.config.created_at), line, classifyLog(line)]; })
+          : [[timeFromIso(worker.updated_at || team.config.created_at), 'waiting for worker output', 'warning']],
       };
     });
     const progress = computeLiveProgress(team.tasks);
     const mailbox = owner ? team.mailboxes[owner.name] || [] : [];
     const activity = buildLiveActivity(team, task, mailbox);
-    const logs = owner?.terminal_lines?.length
-      ? owner.terminal_lines.slice(-14).map(function (line) { return [timeFromIso(team.config.updated_at || team.config.created_at), line, classifyLog(line)]; })
+    const terminalWorker = team.workers.find(function (worker) { return worker.name === selectedWorker; }) || owner;
+    const logs = terminalWorker?.terminal_lines?.length
+      ? terminalWorker.terminal_lines.slice(-40).map(function (line) { return [timeFromIso(terminalWorker.updated_at || team.config.created_at), line, classifyLog(line)]; })
       : [[timeFromIso(team.config.updated_at || team.config.created_at), 'waiting for worker output', 'warning']];
     return {
       id: liveTaskId(team.config.name, task.id),
       liveTeam: team.config.name,
       liveTaskId: String(task.id),
       title: String(task.id) === '1' ? team.config.task : task.subject || team.config.task,
-      status: normalizeLiveStatus(task.status || team.config.status),
+      status: owner?.health === 'stalled' && task.status === 'in_progress' ? 'stalled' : normalizeLiveStatus(task.status || team.config.status),
       created: relativeTime(task.created_at || team.config.created_at),
       model: team.config.model || 'TraeX default',
       progress: progress,
@@ -390,6 +471,98 @@ function showToast(message) {
   window.setTimeout(function () { toast.remove(); }, 2800);
 }
 
+function openWorkerAction(mode) {
+  const task = currentTask();
+  const workers = task.agents.filter(function (agent) { return agent.paneAlive !== false; });
+  if (state.mode === 'live' && (!task.liveTeam || (mode !== 'add' && workers.length === 0))) {
+    showToast('No live worker is available for this action.');
+    return;
+  }
+  state.actionMode = mode;
+  elements.actionEyebrow.textContent = mode === 'add' ? 'Team membership' : mode === 'assign' ? 'Durable task' : 'Worker message';
+  elements.actionTitle.textContent = mode === 'add' ? 'Add independent worker' : mode === 'assign' ? 'Assign task' : 'Send follow-up';
+  elements.actionSubmit.textContent = mode === 'add' ? 'Add worker' : mode === 'assign' ? 'Assign' : 'Send';
+  elements.actionTargetLabel.textContent = mode === 'add' ? 'Role' : 'Worker';
+  elements.actionDependenciesRow.hidden = mode !== 'assign';
+  elements.actionContext.textContent = task.liveTeam
+    ? mode === 'add' ? 'Team ' + task.liveTeam + ' · creates a new pane, session, branch, worktree, and initial task.' : 'Team ' + task.liveTeam + ' · messages resume the existing worker session.'
+    : 'Preview mode updates local mock state only.';
+  elements.actionWorker.innerHTML = mode === 'add'
+    ? ['reviewer', 'explorer', 'architect', 'executor', 'test-engineer'].map(function (role) { return '<option value="' + role + '">' + role + '</option>'; }).join('')
+    : workers.map(function (worker) {
+      return '<option value="' + escapeHtml(worker.id) + '"' + (worker.selected ? ' selected' : '') + '>'
+        + escapeHtml(worker.id + ' · ' + worker.role + ' · ' + label(worker.status)) + '</option>';
+    }).join('');
+  elements.actionMessage.value = mode === 'assign' ? '' : '';
+  elements.actionDependencies.value = mode === 'assign' && task.liveTaskId ? task.liveTaskId : '';
+  elements.actionError.textContent = '';
+  elements.actionBackdrop.hidden = false;
+  requestAnimationFrame(function () { elements.actionMessage.focus(); });
+}
+
+function closeWorkerAction() {
+  elements.actionBackdrop.hidden = true;
+  elements.actionError.textContent = '';
+}
+
+async function submitWorkerAction(event) {
+  event.preventDefault();
+  const task = currentTask();
+  const worker = elements.actionWorker.value;
+  const message = elements.actionMessage.value.trim();
+  if (message.length < 3) { elements.actionError.textContent = 'Enter a bounded instruction of at least three characters.'; return; }
+  elements.actionSubmit.disabled = true;
+  try {
+    if (state.mode === 'live') {
+      if (state.actionMode === 'add') {
+        await callAction(buildWorkerActionPayload({ mode: 'add', team: task.liveTeam, target: worker, message: message, model: task.model }));
+      } else if (state.actionMode === 'assign') {
+        const dependencies = parseDependencyIds(elements.actionDependencies.value);
+        await callAction(buildWorkerActionPayload({ mode: 'assign', team: task.liveTeam, target: worker, message: message, dependencies: dependencies }));
+      } else {
+        await callAction(buildWorkerActionPayload({ mode: 'message', team: task.liveTeam, target: worker, message: message }));
+      }
+    } else {
+      task.logs.push([now(), worker + ': ' + message, 'command']);
+      task.status = 'working';
+      saveState(); renderTask();
+    }
+    closeWorkerAction();
+    const outcome = state.actionMode === 'add' ? 'Worker added with role ' : state.actionMode === 'assign' ? 'Task assigned to ' : 'Message queued for ';
+    showToast(outcome + worker + '.');
+  } catch (error) {
+    elements.actionError.textContent = error.message;
+  } finally {
+    elements.actionSubmit.disabled = false;
+  }
+}
+
+function openStopConfirmation() {
+  const task = currentTask();
+  const team = state.liveSnapshot?.teams?.find(function (item) { return item.config.name === task.liveTeam; });
+  const activeWorkers = team?.workers.filter(function (worker) { return worker.pane_alive && !['completed', 'failed', 'cancelled'].includes(worker.status); }).length || 0;
+  const pendingTasks = team?.tasks.filter(function (item) { return !['completed', 'failed', 'cancelled'].includes(item.status); }).length || 0;
+  elements.confirmCopy.textContent = task.liveTeam
+    ? 'This stops ' + task.liveTeam + ', closes its Dashboard-owned tmux session, and cancels ' + activeWorkers + ' active workers across ' + pendingTasks + ' unfinished tasks.'
+    : 'This stops the current preview task.';
+  elements.confirmBackdrop.hidden = false;
+  requestAnimationFrame(function () { document.getElementById('confirm-stop-button').focus(); });
+}
+
+function closeStopConfirmation() { elements.confirmBackdrop.hidden = true; }
+
+function selectWorker(workerId) {
+  const task = currentTask();
+  task.agents.forEach(function (item) { item.selected = item.id === workerId; });
+  if (task.liveTeam) state.selectedWorkerByTeam[task.liveTeam] = workerId;
+  renderTask();
+}
+
+function moveSelection(collection, currentIndex, delta, callback) {
+  if (!collection.length) return;
+  callback(nextWrappedIndex(collection.length, currentIndex, delta));
+}
+
 async function setTaskStatus(status, logText) {
   const task = currentTask();
   if (state.mode === 'live') {
@@ -412,11 +585,7 @@ async function setTaskStatus(status, logText) {
 async function addAgentNode() {
   const task = currentTask();
   if (state.mode === 'live') {
-    if (!task.liveTeam) { showToast('Launch a Team before adding a worker.'); return; }
-    try {
-      await callAction({ action: 'add-worker', team: task.liveTeam, role: 'reviewer', assignment: 'Review the current task result and report evidence without changing files.' });
-      showToast('Verifier worker requested.');
-    } catch (error) { showToast(error.message); }
+    openWorkerAction('add');
     return;
   }
   if (task.agents.length >= 6) { showToast('Agent limit reached for this task.'); return; }
@@ -434,12 +603,14 @@ async function createTask(event) {
   event.preventDefault();
   const form = new FormData(elements.form);
   const name = String(form.get('taskName') || '').trim();
+  const teamName = String(form.get('teamName') || '').trim();
   const count = Number(form.get('agents'));
   if (name.length < 4) { elements.formError.textContent = 'Use at least four characters for the task name.'; return; }
+  if (teamName && !/^[a-z0-9][a-z0-9-]{0,59}$/i.test(teamName)) { elements.formError.textContent = 'Team name may contain letters, numbers, and hyphens.'; return; }
   if (!Number.isInteger(count) || count < 1 || count > 6) { elements.formError.textContent = 'Agent count must be between 1 and 6.'; return; }
   if (state.mode === 'live') {
     try {
-      const result = await callAction({ action: 'start-team', title: name, workers: count, model: String(form.get('model')), auto_plan: true });
+      const result = await callAction({ action: 'start-team', team: teamName || undefined, title: name, workers: count, model: String(form.get('model')), auto_plan: form.get('planning') !== 'static' });
       elements.form.reset(); closeTaskModal(); showToast('Team ' + result.team + ' is starting.');
     } catch (error) { elements.formError.textContent = error.message; }
     return;
@@ -469,29 +640,69 @@ document.addEventListener('click', function (event) {
   const tab = event.target.closest('[data-tab]');
   if (tab) { state.inspectorTab = tab.dataset.tab; document.querySelectorAll('.inspector-tab').forEach(function (button) { button.classList.toggle('active', button === tab); }); renderInspector(currentTask()); return; }
   const agent = event.target.closest('[data-agent-id]');
-  if (agent) { currentTask().agents.forEach(function (item) { item.selected = item.id === agent.dataset.agentId; }); renderAgents(currentTask()); showToast(agent.dataset.agentId + ' selected.'); return; }
+  if (agent) { selectWorker(agent.dataset.agentId); return; }
   const target = event.target.closest('[data-action]');
   if (!target) return;
   const action = target.dataset.action;
   if (action === 'new-task') openTaskModal();
   if (action === 'close-modal') closeTaskModal();
   if (action === 'add-node') addAgentNode();
-  if (action === 'run-task') setTaskStatus('working', 'orchestrator: execution resumed');
-  if (action === 'stop-task') setTaskStatus('failed', 'orchestrator: execution stopped by operator');
-  if (action === 'retry-task') { currentTask().progress = Math.max(16, currentTask().progress - 12); setTaskStatus('working', 'orchestrator: retrying failed nodes'); }
+  if (action === 'message-worker') openWorkerAction('message');
+  if (action === 'assign-worker') openWorkerAction('assign');
+  if (action === 'confirm-stop') openStopConfirmation();
+  if (action === 'stop-task') { closeStopConfirmation(); setTaskStatus('failed', 'orchestrator: execution stopped by operator'); }
+  if (action === 'close-action') closeWorkerAction();
+  if (action === 'close-confirm') closeStopConfirmation();
+  if (action === 'show-shortcuts') { elements.settings.hidden = true; elements.shortcutsBackdrop.hidden = false; }
+  if (action === 'close-shortcuts') elements.shortcutsBackdrop.hidden = true;
   if (action === 'show-settings') elements.settings.hidden = false;
   if (action === 'close-settings') elements.settings.hidden = true;
-  if (action === 'toggle-notifications') showToast('Two agent updates are waiting in Activity.');
+  if (action === 'toggle-notifications') {
+    const summary = summarizeRuntime(state.liveSnapshot);
+    const activityTab = document.querySelector('[data-tab="activity"]');
+    if (activityTab) activityTab.click();
+    showToast(summary.attention ? summary.attention + ' runtime items need attention.' : 'No runtime items need attention.');
+  }
 });
 
 elements.form.addEventListener('submit', createTask);
-document.getElementById('status-button').addEventListener('click', function () { showToast('All runtimes, claims, and mailboxes are healthy.'); });
+elements.actionForm.addEventListener('submit', submitWorkerAction);
+document.getElementById('status-button').addEventListener('click', function () {
+  if (!state.liveSnapshot) { showToast('Live runtime is not connected.'); return; }
+  const summary = summarizeRuntime(state.liveSnapshot);
+  showToast(summary.teams + ' teams · ' + summary.running + ' running · ' + summary.workers + ' workers · ' + summary.attention + ' need attention');
+});
 elements.modal.addEventListener('click', function (event) { if (event.target === elements.modal) closeTaskModal(); });
+elements.actionBackdrop.addEventListener('click', function (event) { if (event.target === elements.actionBackdrop) closeWorkerAction(); });
+elements.confirmBackdrop.addEventListener('click', function (event) { if (event.target === elements.confirmBackdrop) closeStopConfirmation(); });
+elements.shortcutsBackdrop.addEventListener('click', function (event) { if (event.target === elements.shortcutsBackdrop) elements.shortcutsBackdrop.hidden = true; });
 elements.density.addEventListener('change', function () { state.compact = elements.density.checked; saveState(); renderSettings(); });
 elements.completed.addEventListener('change', function () { state.showCompleted = elements.completed.checked; saveState(); renderAgents(currentTask()); });
 document.addEventListener('keydown', function (event) {
-  if (event.key === 'Escape') { closeTaskModal(); elements.settings.hidden = true; }
+  const editing = event.target.matches('input, textarea, select');
+  if (event.key === 'Escape') { closeTaskModal(); closeWorkerAction(); closeStopConfirmation(); elements.shortcutsBackdrop.hidden = true; elements.settings.hidden = true; }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openTaskModal(); }
+  if (editing || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.key === '?') { elements.shortcutsBackdrop.hidden = !elements.shortcutsBackdrop.hidden; return; }
+  if (event.key === '1' || event.key === '2') {
+    const tab = document.querySelector('[data-tab="' + (event.key === '1' ? 'tasks' : 'activity') + '"]');
+    if (tab) tab.click();
+    return;
+  }
+  if (event.key.toLowerCase() === 'm') { openWorkerAction('message'); return; }
+  if (event.key.toLowerCase() === 'a') { openWorkerAction('assign'); return; }
+  if (event.key.toLowerCase() === 'j' || event.key.toLowerCase() === 'k') {
+    const index = state.tasks.findIndex(function (task) { return task.id === state.selectedTaskId; });
+    moveSelection(state.tasks, Math.max(0, index), event.key.toLowerCase() === 'j' ? 1 : -1, function (next) {
+      state.selectedTaskId = state.tasks[next].id; saveState(); renderTask();
+    });
+    return;
+  }
+  if (event.key === '[' || event.key === ']') {
+    const workers = currentTask().agents;
+    const index = workers.findIndex(function (worker) { return worker.selected; });
+    moveSelection(workers, Math.max(0, index), event.key === ']' ? 1 : -1, function (next) { selectWorker(workers[next].id); });
+  }
 });
 
 window.setInterval(function () {
@@ -502,6 +713,10 @@ window.setInterval(function () {
   if (task.logs.length > 16) task.logs.splice(0, task.logs.length - 16);
   renderTask();
 }, 4200);
+
+window.setInterval(function () {
+  if (state.mode === 'live') renderHud(currentTask());
+}, 1000);
 
 renderSettings();
 if (window.__OTX_LIVE_SNAPSHOT__) applyLiveSnapshot(window.__OTX_LIVE_SNAPSHOT__);

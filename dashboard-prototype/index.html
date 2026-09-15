@@ -17,6 +17,12 @@
             <span>Multi-agent Orchestration</span>
           </div>
         </div>
+        <div id="runtime-hud" class="runtime-hud" aria-live="polite">
+          <span id="hud-team">team:—</span>
+          <span id="hud-workers">0 workers</span>
+          <span id="hud-state">idle</span>
+          <span id="hud-updated">updated:—</span>
+        </div>
         <div class="topbar-actions">
           <button id="status-button" class="status-pill" type="button" aria-label="System status">
             <span class="status-dot"></span>
@@ -24,7 +30,7 @@
           </button>
           <button class="icon-button" type="button" data-action="toggle-notifications" aria-label="Notifications">
             <i data-lucide="bell" aria-hidden="true"></i>
-            <span class="notification-badge">2</span>
+            <span id="notification-badge" class="notification-badge">0</span>
           </button>
           <div class="avatar" aria-label="Signed in as Samuel">S</div>
         </div>
@@ -49,7 +55,7 @@
 
             <section class="task-section">
               <div class="section-heading">
-                <div class="section-label">Tasks</div>
+              <div class="section-label">Teams &amp; tasks</div>
                 <button class="tiny-icon-button" type="button" data-action="new-task" aria-label="Create task">
                   <i data-lucide="plus" aria-hidden="true"></i>
                 </button>
@@ -113,7 +119,7 @@
               <div class="branch-guide" aria-hidden="true"><span></span><span></span><span></span></div>
 
               <div id="child-agent-grid" class="child-agent-grid"></div>
-              <button class="add-node-button" type="button" data-action="add-node">
+              <button id="add-node-button" class="add-node-button" type="button" data-action="add-node">
                 <i data-lucide="plus" aria-hidden="true"></i>
                 Add Node
               </button>
@@ -121,8 +127,8 @@
 
             <aside class="inspector" aria-label="Task inspector">
               <div class="inspector-tabs" role="tablist">
-                <button class="inspector-tab active" type="button" role="tab" data-tab="tasks">Tasks <span>3</span></button>
-                <button class="inspector-tab" type="button" role="tab" data-tab="activity">Activity <span>8</span></button>
+                <button class="inspector-tab active" type="button" role="tab" data-tab="tasks">Tasks <span id="task-count">3</span></button>
+                <button class="inspector-tab" type="button" role="tab" data-tab="activity">Activity <span id="activity-count">8</span></button>
               </div>
               <div id="inspector-content" class="inspector-content"></div>
             </aside>
@@ -137,7 +143,7 @@
               <div id="terminal-lines" class="terminal-lines" aria-live="polite"></div>
             </div>
             <aside class="monitor-summary">
-              <div class="summary-heading"><span>Runtime</span><strong>Live</strong></div>
+              <div class="summary-heading"><span>Runtime</span><strong id="runtime-state">Live</strong></div>
               <div class="summary-grid">
                 <div class="summary-cell"><span>Agents</span><strong id="summary-agents">3</strong></div>
                 <div class="summary-cell"><span>Tokens</span><strong id="summary-tokens">12.4k</strong></div>
@@ -147,14 +153,14 @@
               <div class="quick-actions">
                 <div class="section-label">Quick actions</div>
                 <div class="quick-action-row">
-                  <button class="quick-button primary" type="button" data-action="run-task">
-                    <i data-lucide="play" aria-hidden="true"></i>Run
+                  <button id="message-button" class="quick-button primary" type="button" data-action="message-worker">
+                    <i data-lucide="send" aria-hidden="true"></i>Message
                   </button>
-                  <button class="quick-button danger" type="button" data-action="stop-task">
+                  <button id="stop-button" class="quick-button danger" type="button" data-action="confirm-stop">
                     <i data-lucide="square" aria-hidden="true"></i>Stop
                   </button>
-                  <button class="quick-button" type="button" data-action="retry-task">
-                    <i data-lucide="refresh-cw" aria-hidden="true"></i>Retry
+                  <button id="assign-button" class="quick-button" type="button" data-action="assign-worker">
+                    <i data-lucide="list-plus" aria-hidden="true"></i>Assign
                   </button>
                 </div>
               </div>
@@ -168,8 +174,10 @@
       <form id="task-form" class="task-modal">
         <div class="modal-head"><div><span class="eyebrow">New orchestration</span><h2>Launch Task</h2></div><button type="button" class="icon-button" data-action="close-modal" aria-label="Close"><i data-lucide="x" aria-hidden="true"></i></button></div>
         <label>Task name<input id="task-name" name="taskName" autocomplete="off" placeholder="e.g. Harden session recovery" required minlength="4"></label>
+        <label>Team name <small>optional</small><input id="team-name" name="teamName" autocomplete="off" placeholder="e.g. session-hardening" pattern="[A-Za-z0-9][A-Za-z0-9-]{0,59}"></label>
         <label>Model<select id="task-model" name="model"><option>Seed-2.1-Turbo</option><option>GPT-5.6-Sol</option><option>GPT-5.4</option><option>GPT-5.5</option></select></label>
         <label>Agent count<input id="task-agents" name="agents" type="number" min="1" max="6" value="3"></label>
+        <label>Planning<select id="task-planning" name="planning"><option value="auto">Structured planner</option><option value="static">Static role lanes</option></select></label>
         <p id="form-error" class="form-error" aria-live="polite"></p>
         <div class="modal-actions"><button type="button" class="secondary-button" data-action="close-modal">Cancel</button><button class="primary-button" type="submit">Create & Run</button></div>
       </form>
@@ -179,11 +187,41 @@
       <div class="settings-head"><div><span class="eyebrow">Display</span><h2>Console settings</h2></div><button class="icon-button" type="button" data-action="close-settings" aria-label="Close settings"><i data-lucide="x" aria-hidden="true"></i></button></div>
       <label class="switch-row"><span><strong>Compact density</strong><small>Tighten cards and logs</small></span><input id="density-toggle" type="checkbox"></label>
       <label class="switch-row"><span><strong>Show completed nodes</strong><small>Keep finished agents in the graph</small></span><input id="completed-toggle" type="checkbox" checked></label>
+      <button class="shortcut-link" type="button" data-action="show-shortcuts"><i data-lucide="keyboard" aria-hidden="true"></i>Keyboard shortcuts</button>
+    </div>
+
+    <div id="action-backdrop" class="modal-backdrop" hidden>
+      <form id="action-form" class="task-modal action-modal">
+        <div class="modal-head"><div><span id="action-eyebrow" class="eyebrow">Worker message</span><h2 id="action-title">Send follow-up</h2></div><button type="button" class="icon-button" data-action="close-action" aria-label="Close"><i data-lucide="x" aria-hidden="true"></i></button></div>
+        <p id="action-context" class="modal-context"></p>
+        <label><span id="action-target-label">Worker</span><select id="action-worker" name="worker"></select></label>
+        <label id="action-dependencies-row" hidden>Depends on<input id="action-dependencies" name="dependencies" autocomplete="off" placeholder="e.g. 1,2 (optional)"></label>
+        <label>Instructions<textarea id="action-message" name="message" rows="6" placeholder="Give one bounded, verifiable instruction" required minlength="3"></textarea></label>
+        <p id="action-error" class="form-error" aria-live="polite"></p>
+        <div class="modal-actions"><button type="button" class="secondary-button" data-action="close-action">Cancel</button><button id="action-submit" class="primary-button" type="submit">Send</button></div>
+      </form>
+    </div>
+
+    <div id="confirm-backdrop" class="modal-backdrop" hidden>
+      <div class="task-modal confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+        <div class="danger-icon"><i data-lucide="octagon-alert" aria-hidden="true"></i></div>
+        <span class="eyebrow">Destructive action</span>
+        <h2 id="confirm-title">Stop this Team?</h2>
+        <p id="confirm-copy" class="modal-context"></p>
+        <div class="modal-actions"><button type="button" class="secondary-button" data-action="close-confirm">Keep running</button><button id="confirm-stop-button" type="button" class="primary-button danger-button" data-action="stop-task">Stop Team</button></div>
+      </div>
+    </div>
+
+    <div id="shortcuts-backdrop" class="modal-backdrop" hidden>
+      <div class="task-modal shortcuts-modal" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+        <div class="modal-head"><div><span class="eyebrow">Keyboard first</span><h2 id="shortcuts-title">Dashboard shortcuts</h2></div><button type="button" class="icon-button" data-action="close-shortcuts" aria-label="Close"><i data-lucide="x" aria-hidden="true"></i></button></div>
+        <div class="shortcut-grid"><kbd>J / K</kbd><span>Next / previous task</span><kbd>[ / ]</kbd><span>Previous / next worker</span><kbd>1 / 2</kbd><span>Tasks / Activity inspector</span><kbd>M</kbd><span>Message focused worker</span><kbd>A</kbd><span>Assign a task</span><kbd>⌘/Ctrl K</kbd><span>Launch Team</span><kbd>?</kbd><span>Toggle this help</span></div>
+      </div>
     </div>
 
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
     <!-- OTX_LIVE_BOOTSTRAP -->
     <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>

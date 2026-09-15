@@ -17,7 +17,11 @@
   "files": [
     "src/",
     "dashboard-prototype/",
+    "assets/oh-my-traex-architecture.html",
+    "assets/oh-my-traex-architecture.png",
+    "docs/oh-my-traex.architecture.json",
     "README.md",
+    "README.en.md",
     "LICENSE"
   ],
   "keywords": [
