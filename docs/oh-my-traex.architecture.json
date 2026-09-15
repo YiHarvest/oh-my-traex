@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "oh-my-traex: Native + Durable Multi-Agent Architecture",
+    "locale": "en",
+    "output": "../assets/oh-my-traex-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/YiHarvest/oh-my-traex",
+      "revision": "77a683a3350b4cc7a9156979951d751dc220f856"
+    },
+    "viewBox": [1390, 700],
+    "views": [
+      {
+        "id": "durable-team",
+        "label": "Durable Team path",
+        "focus": ["operator", "cli", "runtime", "state", "workers", "worktrees", "integration"],
+        "note": "Follow a Team request from the CLI into durable state, isolated workers, and verified integration."
+      },
+      {
+        "id": "control-plane",
+        "label": "Live control plane",
+        "focus": ["operator", "dashboard", "state", "workers"],
+        "note": "See how the repository-scoped Dashboard reads state and dispatches restricted actions."
+      },
+      {
+        "id": "nested-agents",
+        "label": "Two-level execution",
+        "focus": ["runtime", "workers", "nativeChildren"],
+        "note": "Independent first-level workers may use lightweight native TraeX children internally."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "operator",
+      "type": "external",
+      "label": "Operator",
+      "sublabel": "CLI or browser",
+      "pos": [35, 285],
+      "size": [130, 70]
+    },
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "OTX CLI",
+      "sublabel": "run · team · dashboard",
+      "tag": "src/cli.js",
+      "pos": [220, 285],
+      "size": [155, 70],
+      "sources": [{ "path": "src/cli.js", "line": 1, "label": "Command router" }]
+    },
+    {
+      "id": "planner",
+      "type": "backend",
+      "label": "Structured Planner",
+      "sublabel": "Validated role + DAG plan",
+      "pos": [450, 75],
+      "size": [175, 74],
+      "sources": [{ "path": "src/team/planner.js", "line": 1, "label": "Planner schema" }]
+    },
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "Team Runtime",
+      "sublabel": "Lifecycle + dispatch",
+      "tag": "leader-owned",
+      "pos": [450, 315],
+      "size": [175, 74],
+      "sources": [{ "path": "src/team/runtime.js", "line": 12, "label": "Team lifecycle" }]
+    },
+    {
+      "id": "dashboard",
+      "type": "frontend",
+      "label": "Live Dashboard",
+      "sublabel": "REST actions + SSE snapshots",
+      "tag": "127.0.0.1",
+      "pos": [450, 555],
+      "size": [175, 74],
+      "sources": [{ "path": "dashboard-prototype/live-server.js", "line": 1, "label": "Control plane" }]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "Durable Team State",
+      "sublabel": "tasks · claims · mailbox · leases",
+      "tag": ".git/otx/team",
+      "pos": [720, 315],
+      "size": [190, 74],
+      "sources": [{ "path": "src/team/state.js", "line": 1, "label": "Atomic records" }]
+    },
+    {
+      "id": "workers",
+      "type": "backend",
+      "label": "Independent Workers",
+      "sublabel": "TraeX session + tmux pane",
+      "tag": "worker-1 … worker-N",
+      "pos": [990, 170],
+      "size": [185, 78],
+      "sources": [{ "path": "src/team/worker-run.js", "line": 1, "label": "Worker loop" }]
+    },
+    {
+      "id": "worktrees",
+      "type": "security",
+      "label": "Git Worktree Isolation",
+      "sublabel": "Branch + ownership boundary",
+      "pos": [990, 470],
+      "size": [185, 78],
+      "sources": [{ "path": "src/team/worktree.js", "line": 1, "label": "Isolation" }]
+    },
+    {
+      "id": "nativeChildren",
+      "type": "external",
+      "label": "Native TraeX Children",
+      "sublabel": "Lightweight nested fan-out",
+      "pos": [1205, 170],
+      "size": [160, 78]
+    },
+    {
+      "id": "integration",
+      "type": "backend",
+      "label": "Verified Integration",
+      "sublabel": "Commit-range validation",
+      "pos": [1205, 470],
+      "size": [160, 78],
+      "sources": [{ "path": "src/team/runtime.js", "line": 298, "label": "Integration gate" }]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Repository-scoped OTX runtime",
+      "wraps": ["planner", "runtime", "dashboard", "state", "workers", "worktrees", "integration"],
+      "pad": 22
+    }
+  ],
+  "connections": [
+    { "id": "operatorCli", "from": "operator", "to": "cli", "label": "commands", "variant": "emphasis" },
+    { "id": "cliRuntime", "from": "cli", "to": "runtime", "label": "start / control", "variant": "emphasis", "labelAt": [410, 270] },
+    { "id": "runtimePlanner", "from": "runtime", "to": "planner", "label": "read-only plan" },
+    { "id": "plannerState", "from": "planner", "to": "state", "label": "validated DAG" },
+    { "id": "runtimeState", "from": "runtime", "to": "state", "label": "atomic lifecycle", "variant": "emphasis", "labelAt": [610, 295] },
+    { "id": "cliDashboard", "from": "cli", "to": "dashboard", "label": "serve locally" },
+    { "id": "dashboardState", "from": "dashboard", "to": "state", "label": "SSE snapshots + scoped actions", "variant": "dashed" },
+    { "id": "stateWorkers", "from": "state", "to": "workers", "label": "dispatch + results", "variant": "emphasis", "labelAt": [930, 292] },
+    { "id": "workersWorktrees", "from": "workers", "to": "worktrees", "label": "isolated writes", "variant": "security", "labelAt": [1083, 330] },
+    { "id": "workersChildren", "from": "workers", "to": "nativeChildren", "label": "optional native spawn", "labelAt": [1160, 265] },
+    { "id": "worktreesIntegration", "from": "worktrees", "to": "integration", "label": "clean commit range", "variant": "security", "labelAt": [1160, 565] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two execution surfaces",
+      "items": ["otx run keeps lightweight native TraeX children", "otx team owns durable independent processes and panes"]
+    },
+    {
+      "dot": "emerald",
+      "title": "Durable coordination",
+      "items": ["Tasks, DAG edges, claims, leases, mailboxes, and results live under Git common state", "Long-lived workers resume the same TraeX session for follow-ups"]
+    },
+    {
+      "dot": "violet",
+      "title": "Operator control",
+      "items": ["The loopback Dashboard streams live state and owned pane output", "Actions are allow-listed and repository-scoped; no arbitrary shell endpoint"]
+    }
+  ]
+}

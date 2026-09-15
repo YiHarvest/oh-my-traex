@@ -32,7 +32,14 @@ Interactions:
 - toggle compact density and completed-agent visibility in Settings;
 - task and display preferences persist in `localStorage`.
 
-In live mode, **Launch Task**, **Stop**, **Run/Retry**, and **Add Node** call the
-restricted local runtime API. The API exposes only start, stop, send, assign,
-integrate, and add-worker operations scoped to the repository supplied at
-server startup; it does not expose an arbitrary command endpoint.
+In live mode, **Launch Task**, **Message**, **Assign**, **Stop**, and **Add Node**
+call the restricted local runtime API. The API exposes only start, stop, send,
+assign, integrate, and add-worker operations scoped to the repository supplied
+at server startup; it does not expose an arbitrary command endpoint.
+
+The current interaction model follows the same operational principles as the
+oh-my-codex Team HUD: a persistent runtime summary, Team-grouped tasks, direct
+worker focus, explicit message versus durable-task actions, state-aware button
+availability, and a confirmation gate before stopping a Team. Keyboard controls
+include `J/K` for tasks, `[/]` for workers, `1/2` for inspector tabs, `M` for a
+message, `A` for a task assignment, and `?` for help.
