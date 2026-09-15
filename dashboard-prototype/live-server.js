@@ -171,7 +171,7 @@ function runAction(body) {
   if (!body || typeof body.action !== 'string') throw new Error('action is required.');
   if (body.action === 'start-team') return startTeamFromDashboard(body);
   const team = safeName(body.team, 'team');
-  if (body.action === 'stop-team') return stopTeam(repoRoot, team);
+  if (body.action === 'stop-team') return stopDashboardTeam(team);
   if (body.action === 'send-message') {
     return sendTeamMessage(repoRoot, team, safeName(body.worker, 'worker'), requireText(body.message, 'message'));
   }
@@ -186,7 +186,7 @@ function runAction(body) {
   if (body.action === 'add-worker') {
     const role = safeName(body.role, 'role');
     const state = teamStatus(repoRoot, team);
-    const target = state.workers.find((worker) => worker.pane_alive)?.pane_id || state.config.leader_pane_id;
+    const target = state.config.leader_pane_id || state.workers.find((worker) => worker.pane_alive)?.pane_id;
     if (!target) throw new Error('team has no live pane available for worker placement.');
     return addWorker(repoRoot, team, role, requireText(body.assignment, 'assignment'), {
       model: body.model ? requireText(body.model, 'model') : undefined,
@@ -194,6 +194,19 @@ function runAction(body) {
     });
   }
   throw new Error('Unsupported dashboard action: ' + body.action);
+}
+
+function stopDashboardTeam(team) {
+  const stopped = stopTeam(repoRoot, team);
+  const sessionName = 'otx-web-' + team;
+  const leaderPane = stopped.config.leader_pane_id;
+  if (leaderPane) {
+    const owner = spawnSync('tmux', ['display-message', '-p', '-t', leaderPane, '#S'], { encoding: 'utf8' });
+    if (owner.status === 0 && owner.stdout.trim() === sessionName) {
+      spawnSync('tmux', ['kill-session', '-t', sessionName], { encoding: 'utf8' });
+    }
+  }
+  return stopped;
 }
 
 function startTeamFromDashboard(body) {
