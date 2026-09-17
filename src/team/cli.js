@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { addWorker, assignTeamTask, awaitTeam, broadcastTeamMessage, cleanupTeam, diagnoseTeam, integrateTeam, listTasks, readTeamMailbox, reconcileTeam, recoverTeam, removeWorker, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
+import { addWorker, assignTeamTask, awaitTeam, broadcastTeamMessage, cleanupTeam, diagnoseTeam, integrateTeam, listTasks, readTeamEvents, readTeamMailbox, reconcileTeam, recoverTeam, removeWorker, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
 import { listTeamStates } from './state.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
@@ -11,6 +11,7 @@ Usage:
   otx team list [-C DIR] [--json]
   otx team status|reconcile|recover|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose <name> [-C DIR]
+  otx team events <name> [--after CURSOR] [--limit N] [-C DIR]
   otx team add-worker <name> <role> [-C DIR] -- "assignment"
   otx team remove-worker <name> <worker> [-C DIR]
   otx team assign <name> <worker> [--depends-on 1,2] [-C DIR] -- "task"
@@ -21,7 +22,7 @@ Usage:
 
 export function parseTeamArgs(args) {
   const tokens = [...args];
-  const subcommand = ['list', 'tasks', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'status', 'reconcile', 'recover', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
+  const subcommand = ['list', 'tasks', 'events', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'status', 'reconcile', 'recover', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
   const options = { workers: 3, cwd: process.cwd(), timeoutMs: 3_600_000 };
   if (subcommand === 'list') {
     parseOptions(tokens, options);
@@ -73,6 +74,12 @@ export function parseTeamArgs(args) {
     const name = tokens.shift();
     parseOptions(tokens, options);
     if (!name) throw new Error('Usage: otx team tasks <team>');
+    return { subcommand, name, options };
+  }
+  if (subcommand === 'events') {
+    const name = tokens.shift();
+    parseOptions(tokens, options);
+    if (!name) throw new Error('Usage: otx team events <team>');
     return { subcommand, name, options };
   }
   if (subcommand === 'diagnose') {
@@ -169,6 +176,10 @@ export async function runTeamCommand(args) {
     process.stdout.write(`${JSON.stringify(listTasks(cwd, parsed.name), null, 2)}\n`);
     return 0;
   }
+  if (parsed.subcommand === 'events') {
+    process.stdout.write(`${JSON.stringify(readTeamEvents(cwd, parsed.name, { after: parsed.options.after, limit: parsed.options.limit }), null, 2)}\n`);
+    return 0;
+  }
   if (parsed.subcommand === 'diagnose') {
     process.stdout.write(`${JSON.stringify(diagnoseTeam(cwd, parsed.name), null, 2)}\n`);
     return 0;
@@ -242,9 +253,16 @@ function parseOptions(tokens, options) {
     else if (token === '--timeout-ms') options.timeoutMs = Number(requireValue(tokens, ++index, token));
     else if (token.startsWith('--timeout-ms=')) options.timeoutMs = Number(token.slice(13));
     else if (token === '--json') options.json = true;
+    else if (token === '--after') options.after = requireValue(tokens, ++index, token);
+    else if (token.startsWith('--after=')) options.after = token.slice(8);
+    else if (token === '--limit') options.limit = Number(requireValue(tokens, ++index, token));
+    else if (token.startsWith('--limit=')) options.limit = Number(token.slice(8));
     else throw new Error(`Unknown team option: ${token}`);
   }
   if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1) throw new Error('--timeout-ms must be a positive integer.');
+  if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1000)) {
+    throw new Error('--limit must be an integer from 1 to 1000.');
+  }
 }
 
 function parseMessageAndOptions(tokens, options) {

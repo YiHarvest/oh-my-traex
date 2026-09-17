@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { initTeamState, readTeamState, updateWorkerState } from '../src/team/state.js';
+import { readMailbox, initTeamState, readTeamState, updateWorkerState } from '../src/team/state.js';
 import { reconcileTeam, stopTeam, teamStatus } from '../src/team/runtime.js';
 
 test('reports a live worker as stalled when TraeX has no recent activity', () => {
@@ -56,6 +56,35 @@ test('status inspection does not persist dead-worker reconciliation', () => {
     reconcileTeam(cwd, 'demo', deadPane);
     assert.equal(readTeamState(cwd, 'demo').workers[0].status, 'failed');
     assert.equal(readTeamState(cwd, 'demo').tasks[0].status, 'failed');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('reconciler reschedules a failed task once to a compatible live worker', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-runtime-reschedule-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const workers = [
+      { name: 'worker-1', index: 1, status: 'working', role: 'executor', assignment: 'build', requires_commit: true, worktree_path: cwd },
+      { name: 'worker-2', index: 2, status: 'completed', role: 'executor', assignment: 'help', requires_commit: true, worktree_path: cwd },
+    ];
+    const initialized = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader', workers });
+    updateWorkerState(initialized.stateDir, 'worker-1', { pane_id: '%1', pane_pid: 101, updated_at: new Date(0).toISOString() });
+    updateWorkerState(initialized.stateDir, 'worker-2', { pane_id: '%2', pane_pid: 202 });
+    const run = (_command, args) => args.includes('%2')
+      ? { status: 0, stdout: `demo\tworker-2\t${initialized.config.run_id}\t202\t0\n`, stderr: '' }
+      : { status: 1, stdout: '', stderr: 'missing' };
+
+    const first = reconcileTeam(cwd, 'demo', run);
+    assert.equal(first.rescheduled.length, 1);
+    const state = readTeamState(cwd, 'demo');
+    assert.equal(state.tasks[0].owner, 'worker-2');
+    assert.equal(state.tasks[0].status, 'pending');
+    assert.equal(state.tasks[0].reschedule_count, 1);
+    assert.equal(readMailbox(state.stateDir, 'worker-2').messages.length, 1);
+    assert.equal(reconcileTeam(cwd, 'demo', run).rescheduled.length, 0);
+    assert.equal(readMailbox(state.stateDir, 'worker-2').messages.length, 1);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

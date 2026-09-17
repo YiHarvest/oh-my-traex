@@ -150,6 +150,7 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 | `otx team status <name>` | 查看 worker、pane、worktree、commit 和结果 |
 | `otx team reconcile <name>` | 将失联 worker 和 Team 终态显式同步到持久化状态 |
 | `otx team recover <name>` | 恢复启动或成员变更中断后遗留的 pane、worktree 和状态 |
+| `otx team events <name> [--after CURSOR] [--limit N]` | 增量读取按序持久化的 Team 事件 |
 | `otx team await <name>` | 等待所有 worker 进入终态 |
 | `otx team send <name> <worker> <message>` | 向原 worker session 投递 follow-up |
 | `otx team assign <name> <worker> [--depends-on IDs] <task>` | 创建并派发持久化任务 |
@@ -161,6 +162,8 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 | `otx team cleanup <name>` | 清理已停止且安全的 branch/worktree |
 | `otx dashboard [-C repo]` | 启动仓库级 Live Team Dashboard |
 | `otx doctor` | 检查 Node、TraeX、Git、tmux 和 multi-agent feature |
+
+Mailbox 投递使用一次性 receipt token，避免并发 worker 重复消费同一消息。`reconcile` 会将失败 worker 的任务最多自动重调度一次，优先选择同角色且写入要求一致的健康 worker；投递、完成与重调度均写入可增量读取的原子事件记录。
 
 ## 安全边界
 
