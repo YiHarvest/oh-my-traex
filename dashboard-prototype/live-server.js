@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
@@ -19,6 +19,7 @@ const root = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const cliPath = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const options = parseArgs(process.argv.slice(2));
 const repoRoot = resolveRepository(options.repo);
+const dashboardToken = process.env.OTX_DASHBOARD_TOKEN || randomBytes(32).toString('base64url');
 const clients = new Set();
 let lastSnapshotHash = '';
 
@@ -34,15 +35,19 @@ const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, 'http://localhost');
     if (request.method === 'GET' && url.pathname === '/api/health') {
-      return sendJson(response, 200, { ok: true, repo: repoRoot, clients: clients.size });
+      authorizeApiRequest(request, url);
+      return sendJson(response, 200, { ok: true, clients: clients.size });
     }
     if (request.method === 'GET' && url.pathname === '/api/snapshot') {
+      authorizeApiRequest(request, url);
       return sendJson(response, 200, collectSnapshot());
     }
     if (request.method === 'GET' && url.pathname === '/api/events') {
+      authorizeApiRequest(request, url);
       return openEventStream(request, response);
     }
     if (request.method === 'POST' && url.pathname === '/api/actions') {
+      authorizeApiRequest(request, url, true);
       const body = await readJsonBody(request);
       const result = runAction(body);
       broadcastSnapshot(true);
@@ -50,12 +55,14 @@ const server = createServer(async (request, response) => {
     }
     return serveStatic(url.pathname, response);
   } catch (error) {
-    return sendJson(response, 400, { ok: false, error: error.message });
+    return sendJson(response, error.statusCode || 400, { ok: false, error: error.message });
   }
 });
 
 server.listen(options.port, '127.0.0.1', () => {
-  process.stdout.write('oh-my-traex live dashboard: http://127.0.0.1:' + options.port + '\n');
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : options.port;
+  process.stdout.write('oh-my-traex live dashboard: http://127.0.0.1:' + port + '/#token=' + dashboardToken + '\n');
   process.stdout.write('repository: ' + repoRoot + '\n');
 });
 
@@ -72,7 +79,7 @@ function parseArgs(args) {
     else if (token === '--poll-ms') parsed.pollMs = Number(requireValue(args, ++index, token));
     else throw new Error('Unknown dashboard option: ' + token);
   }
-  if (!Number.isInteger(parsed.port) || parsed.port < 1 || parsed.port > 65535) throw new Error('Invalid dashboard port.');
+  if (!Number.isInteger(parsed.port) || parsed.port < 0 || parsed.port > 65535) throw new Error('Invalid dashboard port.');
   if (!Number.isInteger(parsed.pollMs) || parsed.pollMs < 250) throw new Error('--poll-ms must be at least 250.');
   return parsed;
 }
@@ -201,8 +208,10 @@ function stopDashboardTeam(team) {
   const sessionName = 'otx-web-' + team;
   const leaderPane = stopped.config.leader_pane_id;
   if (leaderPane) {
-    const owner = spawnSync('tmux', ['display-message', '-p', '-t', leaderPane, '#S'], { encoding: 'utf8' });
-    if (owner.status === 0 && owner.stdout.trim() === sessionName) {
+    const owner = spawnSync('tmux', ['display-message', '-p', '-t', leaderPane, '#S\t#{@otx_team}\t#{@otx_worker}\t#{@otx_run_id}'], { encoding: 'utf8' });
+    const [session, ownerTeam, ownerWorker, runId] = owner.stdout?.trim().split('\t') || [];
+    if (owner.status === 0 && session === sessionName && ownerTeam === team
+      && ownerWorker === 'leader' && runId === stopped.config.run_id) {
       spawnSync('tmux', ['kill-session', '-t', sessionName], { encoding: 'utf8' });
     }
   }
@@ -250,6 +259,10 @@ function serveStatic(pathname, response) {
     response.writeHead(200, {
       'content-type': contentTypes['.html'],
       'cache-control': 'no-store',
+      'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+      'referrer-policy': 'no-referrer',
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
     });
     response.end(html);
     return;
@@ -277,6 +290,24 @@ function readJsonBody(request) {
     });
     request.once('error', reject);
   });
+}
+
+function authorizeApiRequest(request, url, requireOrigin = false) {
+  const supplied = request.headers['x-otx-token'] || url.searchParams.get('token') || '';
+  const expected = Buffer.from(dashboardToken);
+  const actual = Buffer.from(String(supplied));
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    const error = new Error('Dashboard authorization failed.');
+    error.statusCode = 401;
+    throw error;
+  }
+  const expectedOrigin = `http://${request.headers.host}`;
+  const origin = request.headers.origin;
+  if ((requireOrigin && !origin) || (origin && origin !== expectedOrigin)) {
+    const error = new Error('Dashboard origin check failed.');
+    error.statusCode = 403;
+    throw error;
+  }
 }
 
 function safeName(value, label) {

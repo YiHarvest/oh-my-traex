@@ -5,11 +5,12 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { acknowledgeMailboxMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, readMailbox, renewTaskClaim, updateMailboxMessage, updateWorkerState } from './state.js';
-import { projectTrustArgs } from './trae.js';
+import { buildWorkerExecArgs, buildWorkerResumeArgs, detectTraeCapabilities } from './trae.js';
 import { appendTeamEvent } from './events.js';
 
 const [stateDir, workerName, worktreePath, promptPath, resultPath, sessionId, model = ''] = process.argv.slice(2);
 const initialState = JSON.parse(readFileSync(join(stateDir, 'workers', `${workerName}.json`), 'utf8'));
+detectTraeCapabilities();
 const initialTaskId = String(initialState.initial_task_id || initialState.index);
 updateWorkerState(stateDir, workerName, { status: 'starting', started_at: new Date().toISOString(), pid: process.pid });
 const initialClaim = await waitForInitialClaim();
@@ -17,7 +18,9 @@ let activeClaim = { taskId: initialTaskId, token: initialClaim.token };
 updateWorkerState(stateDir, workerName, { status: 'working', blocked_task_ids: [] });
 
 let activeSessionId = sessionId;
-let child = launchTrae(['exec', '--json', '--skip-git-repo-check', '-C', worktreePath, ...projectTrustArgs(worktreePath), '--sandbox', 'workspace-write', '--session-id', sessionId, '--output-last-message', resultPath], readFileSync(promptPath, 'utf8'));
+let child = launchTrae(buildWorkerExecArgs({
+  worktreePath, sessionId, resultPath, model, prompt: readFileSync(promptPath, 'utf8'),
+}));
 const heartbeat = setInterval(() => {
   updateWorkerState(stateDir, workerName, { heartbeat_at: new Date().toISOString() });
   if (activeClaim) renewTaskClaim(stateDir, activeClaim.taskId, workerName, activeClaim.token);
@@ -100,9 +103,9 @@ while (true) {
   const followupBaseCommit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: worktreePath, encoding: 'utf8' }).stdout.trim();
   const followupStartState = JSON.parse(readFileSync(join(stateDir, 'workers', workerName + '.json'), 'utf8'));
   const followupPath = join(stateDir, 'workers', workerName, `followup-${message.id}.md`);
-  const followupArgs = ['exec', 'resume', '--json', ...projectTrustArgs(worktreePath), '--output-last-message', followupPath];
-  if (model) followupArgs.push('--model', model);
-  followupArgs.push(activeSessionId, message.body);
+  const followupArgs = buildWorkerResumeArgs({
+    worktreePath, sessionId: activeSessionId, resultPath: followupPath, model, prompt: message.body,
+  });
   child = spawn('traex', followupArgs, { cwd: worktreePath, stdio: ['inherit', 'pipe', 'inherit'] });
   attachJsonOutput(child);
   const followupStartedAt = new Date().toISOString();
@@ -225,10 +228,7 @@ function updateTaskStateAfterDeliveryRace(message, taskClaim) {
   });
 }
 
-function launchTrae(baseArgs, prompt) {
-  const args = [...baseArgs];
-  if (model) args.push('--model', model);
-  args.push(prompt);
+function launchTrae(args) {
   const processHandle = spawn('traex', args, { cwd: worktreePath, stdio: ['inherit', 'pipe', 'inherit'] });
   attachJsonOutput(processHandle);
   const startedAt = new Date().toISOString();

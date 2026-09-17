@@ -9,6 +9,7 @@ import { buildOrchestratorPrompt } from './prompt.js';
 import { roleCatalog } from './roles.js';
 import { scheduleDashboardPrompt, startDashboardRuntime, startDashboardUi, stopDashboardRuntime } from './dashboard.js';
 import { runTeamCommand } from './team/cli.js';
+import { detectTraeCapabilities } from './team/trae.js';
 
 const HELP = `oh-my-traex (otx) - TraeX-native multi-agent orchestration
 
@@ -140,6 +141,12 @@ function doctor() {
   const featureText = `${features.stdout || ''}\n${features.stderr || ''}`;
   checks.push(['TraeX multi_agent enabled', /multi_agent\s+stable\s+true/.test(featureText), 'required']);
   checks.push(['TraeX multi_agent_v2 enabled', /multi_agent_v2\s+stable\s+true/.test(featureText), 'recommended']);
+  try {
+    const capabilities = detectTraeCapabilities();
+    checks.push(['TraeX exec contract', true, Object.entries(capabilities).filter(([, enabled]) => enabled).map(([name]) => name).join(', ')]);
+  } catch (error) {
+    checks.push(['TraeX exec contract', false, error.message]);
+  }
 
   for (const [name, ok, detail] of checks) print(`${ok ? 'PASS' : 'FAIL'}  ${name} (${detail})`);
   return checks.every(([, ok]) => ok) ? 0 : 1;

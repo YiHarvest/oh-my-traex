@@ -67,6 +67,9 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       leaderSessionId,
       workers: worktreeWorkers,
     }));
+    runTmuxOrThrow(run, ['set-option', '-p', '-t', env.TMUX_PANE, '@otx_team', name]);
+    runTmuxOrThrow(run, ['set-option', '-p', '-t', env.TMUX_PANE, '@otx_worker', 'leader']);
+    runTmuxOrThrow(run, ['set-option', '-p', '-t', env.TMUX_PANE, '@otx_run_id', config.run_id]);
     updateTeamTransaction(transaction, { phase: 'state-published', run_id: config.run_id });
   } catch (error) {
     rollbackWorkerWorktrees(repoRoot, worktreeWorkers);
