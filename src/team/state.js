@@ -243,6 +243,35 @@ export function reclaimExpiredTask(stateDir, taskId) {
   });
 }
 
+export function reassignTeamTask(stateDir, taskId, fromWorker, toWorker) {
+  return withTaskLock(stateDir, taskId, () => {
+    const task = readTeamTask(stateDir, taskId);
+    if (task.owner !== fromWorker) return { ok: false, error: 'owner_changed', task };
+    if (!['failed', 'pending', 'blocked', 'in_progress'].includes(task.status)) {
+      return { ok: false, error: 'task_not_reschedulable', task };
+    }
+    if (task.status === 'in_progress' && task.claim && Date.parse(task.claim.leased_until) > Date.now()) {
+      return { ok: false, error: 'lease_active', task };
+    }
+    const reassigned = {
+      ...task,
+      owner: toWorker,
+      status: 'pending',
+      claim: null,
+      blocked_by: [],
+      reschedule_count: (task.reschedule_count || 0) + 1,
+      rescheduled_from: fromWorker,
+      rescheduled_at: new Date().toISOString(),
+      error: null,
+      completed_at: null,
+      version: (task.version || 1) + 1,
+      updated_at: new Date().toISOString(),
+    };
+    writeJsonAtomic(taskStatePath(stateDir, taskId), reassigned);
+    return { ok: true, task: reassigned };
+  });
+}
+
 export function completeClaimedTask(stateDir, taskId, workerName, token, updates) {
   return withTaskLock(stateDir, taskId, () => {
     const task = readTeamTask(stateDir, taskId);
@@ -318,6 +347,42 @@ export function updateMailboxMessage(stateDir, workerName, messageId, updates) {
     const updated = { ...readJson(path), ...updates, updated_at: new Date().toISOString() };
     writeJsonAtomic(path, updated);
     return updated;
+  });
+}
+
+export function acknowledgeMailboxMessage(stateDir, workerName, messageId) {
+  const path = mailboxMessagePath(stateDir, workerName, messageId);
+  if (!existsSync(path)) throw new Error(`mailbox message not found: ${messageId}`);
+  return withRecordLock(stateDir, `mailbox-${messageId}`, () => {
+    const current = readJson(path);
+    if (current.status !== 'pending') return { ok: false, error: 'message_not_pending', message: current };
+    const acknowledgedAt = new Date().toISOString();
+    const receipt = { token: randomUUID(), worker: workerName, acknowledged_at: acknowledgedAt };
+    const updated = {
+      ...current,
+      status: 'working',
+      delivery_attempts: (current.delivery_attempts || 0) + 1,
+      delivered_at: acknowledgedAt,
+      receipt,
+      updated_at: acknowledgedAt,
+    };
+    writeJsonAtomic(path, updated);
+    return { ok: true, token: receipt.token, message: updated };
+  });
+}
+
+export function completeMailboxDelivery(stateDir, workerName, messageId, receiptToken, updates) {
+  const path = mailboxMessagePath(stateDir, workerName, messageId);
+  if (!existsSync(path)) throw new Error(`mailbox message not found: ${messageId}`);
+  return withRecordLock(stateDir, `mailbox-${messageId}`, () => {
+    const current = readJson(path);
+    if (current.receipt?.worker !== workerName || current.receipt?.token !== receiptToken) {
+      return { ok: false, error: 'receipt_mismatch', message: current };
+    }
+    if (current.status !== 'working') return { ok: false, error: 'delivery_not_active', message: current };
+    const updated = { ...current, ...updates, receipt: current.receipt, updated_at: new Date().toISOString() };
+    writeJsonAtomic(path, updated);
+    return { ok: true, message: updated };
   });
 }
 

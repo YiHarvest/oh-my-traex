@@ -4,8 +4,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { claimTeamTask, completeClaimedTask, readMailbox, renewTaskClaim, updateMailboxMessage, updateWorkerState } from './state.js';
+import { acknowledgeMailboxMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, readMailbox, renewTaskClaim, updateMailboxMessage, updateWorkerState } from './state.js';
 import { projectTrustArgs } from './trae.js';
+import { appendTeamEvent } from './events.js';
 
 const [stateDir, workerName, worktreePath, promptPath, resultPath, sessionId, model = ''] = process.argv.slice(2);
 const initialState = JSON.parse(readFileSync(join(stateDir, 'workers', `${workerName}.json`), 'utf8'));
@@ -57,6 +58,10 @@ const initialCompletion = completeClaimedTask(stateDir, initialTaskId, workerNam
   result_path: resultPath,
 });
 const persistedInitialStatus = initialCompletion.ok ? finalStatus : 'failed';
+appendTeamEvent(stateDir, `task.${persistedInitialStatus}`, {
+  actor: workerName,
+  data: { task_id: initialTaskId, commit: commitSha, error: initialCompletion.ok ? null : initialCompletion.error },
+});
 updateWorkerState(stateDir, workerName, {
   status: persistedInitialStatus,
   exit_code: exitCode,
@@ -83,9 +88,9 @@ while (true) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     continue;
   }
-  const { message, taskClaim } = selected;
+  const { message, taskClaim, receiptToken } = selected;
   activeClaim = taskClaim ? { taskId: message.task_id, token: taskClaim.token } : null;
-  updateMailboxMessage(stateDir, workerName, message.id, { status: 'working', started_at: new Date().toISOString() });
+  appendTeamEvent(stateDir, 'message.delivered', { actor: workerName, data: { message_id: message.id, task_id: message.task_id } });
   updateWorkerState(stateDir, workerName, {
     status: 'working',
     current_message_id: message.id,
@@ -151,13 +156,20 @@ while (true) {
       persistedFollowupStatus = 'failed';
       persistedFollowupError = completion.error;
     }
+    appendTeamEvent(stateDir, `task.${persistedFollowupStatus}`, {
+      actor: workerName,
+      data: { task_id: message.task_id, message_id: message.id, commit: followupCommitSha, error: persistedFollowupError },
+    });
   }
-  updateMailboxMessage(stateDir, workerName, message.id, {
+  completeMailboxDelivery(stateDir, workerName, message.id, receiptToken, {
     status: persistedFollowupStatus,
     completed_at: new Date().toISOString(),
     result_path: followupPath,
     commit: followupCommitSha,
     error: persistedFollowupError,
+  });
+  appendTeamEvent(stateDir, `message.${persistedFollowupStatus}`, {
+    actor: workerName, data: { message_id: message.id, task_id: message.task_id, commit: followupCommitSha },
   });
   activeClaim = null;
   updateWorkerState(stateDir, workerName, {
@@ -176,9 +188,18 @@ function selectPendingMessage() {
   const pending = readMailbox(stateDir, workerName).messages.filter((item) => item.status === 'pending');
   const blockedTaskIds = [];
   for (const message of pending) {
-    if (!message.task_id) return { message, taskClaim: null };
+    if (!message.task_id) {
+      const delivery = acknowledgeMailboxMessage(stateDir, workerName, message.id);
+      if (delivery.ok) return { message: delivery.message, taskClaim: null, receiptToken: delivery.token };
+      continue;
+    }
     const taskClaim = claimTeamTask(stateDir, message.task_id, workerName);
-    if (taskClaim.ok) return { message, taskClaim };
+    if (taskClaim.ok) {
+      const delivery = acknowledgeMailboxMessage(stateDir, workerName, message.id);
+      if (delivery.ok) return { message: delivery.message, taskClaim, receiptToken: delivery.token };
+      updateTaskStateAfterDeliveryRace(message, taskClaim);
+      continue;
+    }
     if (taskClaim.error === 'blocked_dependency') {
       blockedTaskIds.push(message.task_id);
       continue;
@@ -196,6 +217,12 @@ function selectPendingMessage() {
     });
   }
   return null;
+}
+
+function updateTaskStateAfterDeliveryRace(message, taskClaim) {
+  completeClaimedTask(stateDir, message.task_id, workerName, taskClaim.token, {
+    status: 'pending', claim: null, error: null, completed_at: null,
+  });
 }
 
 function launchTrae(baseArgs, prompt) {

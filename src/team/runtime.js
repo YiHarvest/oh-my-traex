@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { buildLeaderPrompt, buildWorkerPrompt } from './prompt.js';
 import { planTeam } from './planner.js';
-import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, removeTeamWorker, sanitizeTeamName, teamStateDir, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState, withStateLock } from './state.js';
+import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reassignTeamTask, removeTeamWorker, sanitizeTeamName, teamStateDir, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState, withStateLock } from './state.js';
 import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktree, createWorkerWorktrees, inspectWorkerWorktree, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
 import { beginTeamTransaction, finishTeamTransaction, listTeamTransactions, updateTeamTransaction } from './transaction.js';
+import { appendTeamEvent, listTeamEvents } from './events.js';
 
 export async function startTeam({ cwd, task, workerCount, model, teamName, baseRole, autoPlan = true, plannerTimeoutMs, env = process.env, run = spawnSync }) {
   if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team requires running inside tmux.');
@@ -108,6 +109,7 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
     }
     run('tmux', ['select-layout', '-t', env.TMUX_PANE, 'main-vertical'], { encoding: 'utf8' });
     finishTeamTransaction(transaction);
+    appendTeamEvent(stateDir, 'team.started', { data: { workers: worktreeWorkers.map((worker) => worker.name) } });
     return {
       name,
       stateDir,
@@ -183,7 +185,9 @@ function inspectTeam(cwd, name, run, persist) {
       activity_age_ms: activityAgeMs,
     };
   });
-  if (state.config.status === 'running' && state.workers.every((worker) => ['completed', 'failed'].includes(worker.status))) {
+  if (persist) state.rescheduled = rescheduleFailedTasks(state, run);
+  if (state.config.status === 'running' && state.rescheduled?.length === 0
+    && state.workers.every((worker) => ['completed', 'failed'].includes(worker.status))) {
     const producedWorkers = state.workers
       .filter((worker) => worker.requires_commit && worker.commit && worker.commit !== worker.base_commit);
     const integrationCurrent = producedWorkers.length > 0
@@ -261,6 +265,7 @@ export function sendTeamMessage(cwd, name, workerName, message) {
     status: worker.status === 'working' ? 'working' : 'queued',
   });
   updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
+  appendTeamEvent(state.stateDir, 'message.queued', { actor: 'leader', data: { worker: workerName, message_id: created.id } });
   return created;
 }
 
@@ -273,6 +278,7 @@ export function broadcastTeamMessage(cwd, name, message) {
     updateWorkerState(state.stateDir, worker.name, {
       status: worker.status === 'working' ? 'working' : 'queued',
     });
+    appendTeamEvent(state.stateDir, 'message.queued', { actor: 'leader', data: { worker: worker.name, message_id: created.id } });
     return { worker: worker.name, message: created };
   });
   updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
@@ -290,6 +296,11 @@ export function readTeamMailbox(cwd, name, workerName) {
 export function listTasks(cwd, name) {
   const state = readTeamState(cwd, name);
   return listTeamTasks(state.stateDir);
+}
+
+export function readTeamEvents(cwd, name, options = {}) {
+  const state = readTeamState(cwd, name);
+  return listTeamEvents(state.stateDir, options);
 }
 
 export function diagnoseTeam(cwd, name) {
@@ -334,7 +345,42 @@ export function assignTeamTask(cwd, name, workerName, description, dependsOn = [
     status: worker.status === 'working' ? 'working' : 'queued',
   });
   updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
+  appendTeamEvent(state.stateDir, 'task.queued', {
+    actor: 'leader', data: { task_id: task.id, worker: workerName, message_id: message.id },
+  });
   return { task, message };
+}
+
+function rescheduleFailedTasks(state, run) {
+  return withStateLock(state.stateDir, 'scheduler', () => {
+    const current = readTeamState(state.config.cwd, state.config.name);
+    const liveWorkers = current.workers.filter((worker) => paneOwnedBy(run, worker, current.config)
+      && !['failed', 'cancelled'].includes(worker.status));
+    const results = [];
+    for (const task of current.tasks.filter((candidate) => candidate.status === 'failed')) {
+      const failedOwner = current.workers.find((worker) => worker.name === task.owner);
+      if (!failedOwner || failedOwner.status !== 'failed' || (task.reschedule_count || 0) >= 1) continue;
+      const target = liveWorkers.find((worker) => worker.name !== failedOwner.name
+          && worker.requires_commit === task.requires_commit
+          && worker.role === task.role)
+        || liveWorkers.find((worker) => worker.name !== failedOwner.name
+          && worker.requires_commit === task.requires_commit);
+      if (!target) continue;
+      const reassigned = reassignTeamTask(state.stateDir, task.id, failedOwner.name, target.name);
+      if (!reassigned.ok) continue;
+      const body = `Rescheduled OTX task ${task.id} from ${failedOwner.name}: ${task.description}`;
+      const message = enqueueTaskMessage(state.stateDir, target.name, task.id, body);
+      updateWorkerState(state.stateDir, target.name, {
+        status: target.status === 'working' ? 'working' : 'queued',
+      });
+      appendTeamEvent(state.stateDir, 'task.rescheduled', {
+        data: { task_id: task.id, from: failedOwner.name, to: target.name, message_id: message.id },
+      });
+      results.push({ task_id: task.id, from: failedOwner.name, to: target.name, message_id: message.id });
+    }
+    if (results.length > 0) updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
+    return results;
+  });
 }
 
 export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {

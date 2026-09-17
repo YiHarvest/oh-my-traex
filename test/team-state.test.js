@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { addTeamWorker, claimTeamTask, completeClaimedTask, createTeamTask, enqueueMailboxMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredTask, removeTeamWorker, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState } from '../src/team/state.js';
+import { acknowledgeMailboxMessage, addTeamWorker, claimTeamTask, completeClaimedTask, completeMailboxDelivery, createTeamTask, enqueueMailboxMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredTask, removeTeamWorker, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState } from '../src/team/state.js';
 
 test('persists team and worker state under the Git common directory', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-state-'));
@@ -46,6 +46,27 @@ test('stores mailbox messages as durable independently updated records', () => {
     assert.equal(mailbox.messages.find((message) => message.id === first.id).status, 'completed');
     assert.equal(mailbox.messages.find((message) => message.id === second.id).status, 'pending');
     assert.notEqual(first.id, second.id);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('allows one delivery receipt winner across 64 concurrent consumers', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-mailbox-receipt-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'task', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const message = enqueueMailboxMessage(stateDir, 'worker-1', 'only once');
+    const fixture = new URL('./fixtures/ack-message.js', import.meta.url);
+    const results = await Promise.all(Array.from({ length: 64 }, () =>
+      runJsonProcess(fixture, [stateDir, 'worker-1', message.id])));
+    const winner = results.find((result) => result.ok);
+    assert.equal(results.filter((result) => result.ok).length, 1);
+    assert.equal(results.filter((result) => result.error === 'message_not_pending').length, 63);
+    assert.equal(completeMailboxDelivery(stateDir, 'worker-1', message.id, 'wrong', { status: 'completed' }).error, 'receipt_mismatch');
+    assert.equal(completeMailboxDelivery(stateDir, 'worker-1', message.id, winner.token, { status: 'completed' }).ok, true);
+    assert.equal(readMailbox(stateDir, 'worker-1').messages[0].delivery_attempts, 1);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
@@ -196,8 +217,12 @@ test('an old lock owner cannot delete a replacement lock', async () => {
 });
 
 function runClaimProcess(scriptUrl, stateDir, taskId, workerName) {
+  return runJsonProcess(scriptUrl, [stateDir, taskId, workerName]);
+}
+
+function runJsonProcess(scriptUrl, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptUrl.pathname, stateDir, taskId, workerName], {
+    const child = spawn(process.execPath, [scriptUrl.pathname, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';

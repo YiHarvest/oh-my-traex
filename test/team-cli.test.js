@@ -38,6 +38,13 @@ test('parses team transaction recovery', () => {
   assert.equal(parsed.options.cwd, '/repo');
 });
 
+test('parses incremental team event queries', () => {
+  const parsed = parseTeamArgs(['events', 'auth-team', '--after', '0000000000000001', '--limit', '25']);
+  assert.equal(parsed.subcommand, 'events');
+  assert.equal(parsed.options.after, '0000000000000001');
+  assert.equal(parsed.options.limit, 25);
+});
+
 test('parses team resume model override', () => {
   const parsed = parseTeamArgs(['resume', 'auth-team', '--model', 'GPT-5.6-Sol']);
   assert.equal(parsed.subcommand, 'resume');

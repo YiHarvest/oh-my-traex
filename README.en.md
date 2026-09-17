@@ -150,6 +150,7 @@ Example state tree:
 | `otx team status <name>` | Inspect worker, pane, worktree, commit, and result state |
 | `otx team reconcile <name>` | Explicitly persist dead-worker and terminal Team reconciliation |
 | `otx team recover <name>` | Recover panes, worktrees, and state left by interrupted runtime transactions |
+| `otx team events <name> [--after CURSOR] [--limit N]` | Incrementally read the ordered durable Team event stream |
 | `otx team await <name>` | Wait for every worker to reach a terminal state |
 | `otx team send <name> <worker> <message>` | Queue a follow-up for the original worker session |
 | `otx team assign <name> <worker> [--depends-on IDs] <task>` | Create and dispatch a durable task |
@@ -161,6 +162,8 @@ Example state tree:
 | `otx team cleanup <name>` | Remove stopped, safe branches and worktrees |
 | `otx dashboard [-C repo]` | Start the repository-scoped Live Team Dashboard |
 | `otx doctor` | Check Node, TraeX, Git, tmux, and multi-agent features |
+
+Mailbox delivery uses one-time receipt tokens so concurrent consumers cannot process the same message twice. `reconcile` automatically reschedules a failed worker task at most once, preferring a healthy worker with the same role and write requirement. Delivery, completion, and rescheduling transitions are recorded as atomic events for incremental consumers.
 
 ## Safety boundaries
 
