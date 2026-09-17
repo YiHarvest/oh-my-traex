@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -148,19 +148,48 @@ test('reclaims only expired task leases', () => {
   }
 });
 
-test('allows only one claim winner across concurrent processes', async () => {
+test('allows only one claim winner across 64 concurrent processes', async () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-concurrent-claim-'));
   try {
     assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
     const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
     const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
     const fixture = new URL('./fixtures/claim-task.js', import.meta.url);
-    const results = await Promise.all([
-      runClaimProcess(fixture, stateDir, '1', 'worker-1'),
-      runClaimProcess(fixture, stateDir, '1', 'worker-1'),
-    ]);
+    const results = await Promise.all(Array.from(
+      { length: 64 },
+      () => runClaimProcess(fixture, stateDir, '1', 'worker-1'),
+    ));
     assert.equal(results.filter((result) => result.ok).length, 1);
-    assert.equal(results.filter((result) => result.error === 'claim_conflict').length, 1);
+    assert.equal(results.filter((result) => result.error === 'claim_conflict').length, 63);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('an old lock owner cannot delete a replacement lock', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-lock-aba-'));
+  try {
+    const stateDir = join(cwd, 'state');
+    const lockRoot = join(stateDir, '.locks');
+    const lockPath = join(lockRoot, 'shared.lock');
+    const displacedPath = join(lockRoot, 'shared.displaced');
+    const firstReady = join(cwd, 'first-ready');
+    const firstRelease = join(cwd, 'first-release');
+    const secondReady = join(cwd, 'second-ready');
+    const secondRelease = join(cwd, 'second-release');
+    const fixture = new URL('./fixtures/hold-state-lock.js', import.meta.url);
+    const first = runLockProcess(fixture, stateDir, 'shared', firstReady, firstRelease);
+    await waitForFile(firstReady);
+    mkdirSync(lockRoot, { recursive: true });
+    renameSync(lockPath, displacedPath);
+    const second = runLockProcess(fixture, stateDir, 'shared', secondReady, secondRelease);
+    await waitForFile(secondReady);
+    writeFileSync(firstRelease, 'release');
+    await first;
+    assert.equal(existsSync(lockPath), true);
+    writeFileSync(secondRelease, 'release');
+    await second;
+    assert.equal(existsSync(lockPath), false);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
@@ -181,4 +210,24 @@ function runClaimProcess(scriptUrl, stateDir, taskId, workerName) {
       else resolve(JSON.parse(stdout));
     });
   });
+}
+
+function runLockProcess(scriptUrl, stateDir, recordName, readyPath, releasePath) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [scriptUrl.pathname, stateDir, recordName, readyPath, releasePath], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', (code) => code === 0 ? resolve() : reject(new Error(stderr || 'lock process failed')));
+  });
+}
+
+async function waitForFile(path) {
+  const deadline = Date.now() + 5_000;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }

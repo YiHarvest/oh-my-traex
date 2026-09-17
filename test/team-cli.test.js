@@ -24,6 +24,13 @@ test('parses team lifecycle subcommands', () => {
   assert.equal(parsed.options.timeoutMs, 5000);
 });
 
+test('parses explicit team reconciliation', () => {
+  const parsed = parseTeamArgs(['reconcile', 'auth-team', '--json']);
+  assert.equal(parsed.subcommand, 'reconcile');
+  assert.equal(parsed.name, 'auth-team');
+  assert.equal(parsed.options.json, true);
+});
+
 test('parses team resume model override', () => {
   const parsed = parseTeamArgs(['resume', 'auth-team', '--model', 'GPT-5.6-Sol']);
   assert.equal(parsed.subcommand, 'resume');
