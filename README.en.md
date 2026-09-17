@@ -148,6 +148,7 @@ Example state tree:
 | `otx team [N:role] <task>` | Start durable independent Team workers |
 | `otx team list` | List Teams in the current repository |
 | `otx team status <name>` | Inspect worker, pane, worktree, commit, and result state |
+| `otx team reconcile <name>` | Explicitly persist dead-worker and terminal Team reconciliation |
 | `otx team await <name>` | Wait for every worker to reach a terminal state |
 | `otx team send <name> <worker> <message>` | Queue a follow-up for the original worker session |
 | `otx team assign <name> <worker> [--depends-on IDs] <task>` | Create and dispatch a durable task |

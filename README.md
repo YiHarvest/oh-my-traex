@@ -148,6 +148,7 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 | `otx team [N:role] <task>` | 启动独立持久化 Team workers |
 | `otx team list` | 列出当前仓库的 Team |
 | `otx team status <name>` | 查看 worker、pane、worktree、commit 和结果 |
+| `otx team reconcile <name>` | 将失联 worker 和 Team 终态显式同步到持久化状态 |
 | `otx team await <name>` | 等待所有 worker 进入终态 |
 | `otx team send <name> <worker> <message>` | 向原 worker session 投递 follow-up |
 | `otx team assign <name> <worker> [--depends-on IDs] <task>` | 创建并派发持久化任务 |

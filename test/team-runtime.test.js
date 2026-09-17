@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { initTeamState, updateWorkerState } from '../src/team/state.js';
-import { stopTeam, teamStatus } from '../src/team/runtime.js';
+import { initTeamState, readTeamState, updateWorkerState } from '../src/team/state.js';
+import { reconcileTeam, stopTeam, teamStatus } from '../src/team/runtime.js';
 
 test('reports a live worker as stalled when TraeX has no recent activity', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-runtime-'));
@@ -30,6 +30,32 @@ test('reports a live worker as stalled when TraeX has no recent activity', () =>
     const state = teamStatus(cwd, 'demo', run);
     assert.equal(state.workers[0].health, 'stalled');
     assert.ok(state.workers[0].activity_age_ms >= 60_000);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('status inspection does not persist dead-worker reconciliation', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-runtime-readonly-status-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = {
+      name: 'worker-1', index: 1, status: 'working', role: 'reviewer',
+      assignment: 'task', requires_commit: false, worktree_path: cwd,
+    };
+    const initialized = initTeamState({
+      cwd, name: 'demo', task: 'task', leaderPaneId: '%1',
+      leaderSessionId: 'leader', workers: [worker],
+    });
+    updateWorkerState(initialized.stateDir, 'worker-1', {
+      pane_id: '%9', pane_pid: 123, updated_at: new Date(0).toISOString(),
+    });
+    const deadPane = () => ({ status: 1, stdout: '', stderr: 'missing' });
+    assert.equal(teamStatus(cwd, 'demo', deadPane).workers[0].status, 'failed');
+    assert.equal(readTeamState(cwd, 'demo').workers[0].status, 'working');
+    reconcileTeam(cwd, 'demo', deadPane);
+    assert.equal(readTeamState(cwd, 'demo').workers[0].status, 'failed');
+    assert.equal(readTeamState(cwd, 'demo').tasks[0].status, 'failed');
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

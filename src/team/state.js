@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -389,9 +389,21 @@ export function mailboxMessagePath(stateDir, workerName, messageId) {
 
 export function writeJsonAtomic(path, value) {
   mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  renameSync(temporary, path);
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let descriptor;
+  try {
+    descriptor = openSync(temporary, 'wx', 0o600);
+    writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    syncDescriptor(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
+    renameSync(temporary, path);
+    syncDirectory(dirname(path));
+  } catch (error) {
+    if (descriptor !== undefined) closeSync(descriptor);
+    rmSync(temporary, { force: true });
+    throw error;
+  }
 }
 
 function readJson(path) {
@@ -402,19 +414,19 @@ function withTaskLock(stateDir, taskId, callback) {
   return withRecordLock(stateDir, `task-${taskId}`, callback);
 }
 
-function withRecordLock(stateDir, recordName, callback) {
+export function withStateLock(stateDir, recordName, callback) {
   const lockPath = join(stateDir, '.locks', `${recordName}.lock`);
   mkdirSync(dirname(lockPath), { recursive: true });
+  const owner = { token: randomUUID(), pid: process.pid, acquired_at: new Date().toISOString() };
   const deadline = Date.now() + 5_000;
   while (true) {
     try {
       mkdirSync(lockPath);
+      writeJsonAtomic(join(lockPath, 'owner.json'), owner);
       break;
     } catch (error) {
       if (error?.code !== 'EEXIST') throw error;
-      try {
-        if (Date.now() - statSync(lockPath).mtimeMs > 30_000) rmSync(lockPath, { recursive: true });
-      } catch {}
+      recoverAbandonedLock(lockPath);
       if (Date.now() >= deadline) throw new Error(`record lock timeout: ${recordName}`);
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
@@ -422,7 +434,95 @@ function withRecordLock(stateDir, recordName, callback) {
   try {
     return callback();
   } finally {
-    rmSync(lockPath, { recursive: true, force: true });
+    releaseOwnedLock(lockPath, owner.token);
+  }
+}
+
+const withRecordLock = withStateLock;
+
+function recoverAbandonedLock(lockPath) {
+  let owner;
+  let ageMs;
+  try {
+    ageMs = Date.now() - statSync(lockPath).mtimeMs;
+    owner = readJson(join(lockPath, 'owner.json'));
+  } catch {
+    if (ageMs > 30_000) quarantineLock(lockPath, 'unowned');
+    return;
+  }
+  if (ageMs <= 30_000 || processIsLive(owner.pid)) return;
+  quarantineLock(lockPath, owner.token);
+}
+
+function quarantineLock(lockPath, expectedToken) {
+  const quarantine = `${lockPath}.stale.${process.pid}.${randomUUID()}`;
+  try {
+    renameSync(lockPath, quarantine);
+  } catch {
+    return false;
+  }
+  try {
+    const moved = readJson(join(quarantine, 'owner.json'));
+    if (expectedToken !== 'unowned' && moved.token !== expectedToken) {
+      try { renameSync(quarantine, lockPath); } catch {}
+      return false;
+    }
+    rmSync(quarantine, { recursive: true, force: true });
+    return true;
+  } catch {
+    if (expectedToken === 'unowned') {
+      rmSync(quarantine, { recursive: true, force: true });
+      return true;
+    }
+    try { renameSync(quarantine, lockPath); } catch {}
+    return false;
+  }
+}
+
+function releaseOwnedLock(lockPath, token) {
+  try {
+    if (readJson(join(lockPath, 'owner.json')).token !== token) return;
+  } catch {
+    return;
+  }
+  const releasePath = `${lockPath}.release.${process.pid}.${token}`;
+  try {
+    renameSync(lockPath, releasePath);
+    if (readJson(join(releasePath, 'owner.json')).token === token) {
+      rmSync(releasePath, { recursive: true, force: true });
+    } else {
+      try { renameSync(releasePath, lockPath); } catch {}
+    }
+  } catch {}
+}
+
+function processIsLive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== 'ESRCH';
+  }
+}
+
+function syncDescriptor(descriptor) {
+  try {
+    fsyncSync(descriptor);
+  } catch (error) {
+    if (!(process.platform === 'win32' && error?.code === 'EPERM')) throw error;
+  }
+}
+
+function syncDirectory(path) {
+  let descriptor;
+  try {
+    descriptor = openSync(path, 'r');
+    syncDescriptor(descriptor);
+  } catch (error) {
+    if (!(process.platform === 'win32' && error?.code === 'EPERM')) throw error;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 

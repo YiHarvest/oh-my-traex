@@ -107,6 +107,14 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
 }
 
 export function teamStatus(cwd, name, run = spawnSync) {
+  return inspectTeam(cwd, name, run, false);
+}
+
+export function reconcileTeam(cwd, name, run = spawnSync) {
+  return inspectTeam(cwd, name, run, true);
+}
+
+function inspectTeam(cwd, name, run, persist) {
   const state = readTeamState(cwd, name);
   state.workers = state.workers.map((worker) => {
     const paneAlive = paneOwnedBy(run, worker, state.config);
@@ -127,18 +135,21 @@ export function teamStatus(cwd, name, run = spawnSync) {
     const startupGrace = worker.status === 'starting'
       && Date.now() - Date.parse(worker.updated_at || state.config.created_at) < 10_000;
     if (!paneAlive && !startupGrace && ['starting', 'queued', 'working'].includes(worker.status)) {
-      const failed = updateWorkerState(state.stateDir, worker.name, {
+      const failure = {
         status: 'failed',
         error: 'worker pane exited before recording a terminal result',
         completed_at: new Date().toISOString(),
         pane_alive: false,
         dirty: worktreeStatus(worker.worktree_path) !== '',
-      });
-      updateTaskState(state.stateDir, worker.initial_task_id || String(worker.index), {
-        status: 'failed',
-        error: failed.error,
-        completed_at: failed.completed_at,
-      });
+      };
+      const failed = persist ? updateWorkerState(state.stateDir, worker.name, failure) : { ...worker, ...failure };
+      if (persist) {
+        updateTaskState(state.stateDir, worker.initial_task_id || String(worker.index), {
+          status: 'failed',
+          error: failed.error,
+          completed_at: failed.completed_at,
+        });
+      }
       return { ...failed, health: 'dead', heartbeat_age_ms: heartbeatAgeMs };
     }
     return {
@@ -156,12 +167,15 @@ export function teamStatus(cwd, name, run = spawnSync) {
     const integrationCurrent = producedWorkers.length > 0
       && producedWorkers.every((worker) => ['integrated', 'already_integrated'].includes(worker.integration?.status)
         && worker.integration?.commit === worker.commit);
-    state.config = updateTeamConfig(state.stateDir, {
+    const terminalConfig = {
       status: state.workers.some((worker) => worker.status === 'failed')
         ? 'failed'
         : integrationCurrent ? 'integrated' : 'ready',
-      completed_at: new Date().toISOString(),
-    });
+      completed_at: state.config.completed_at || (persist ? new Date().toISOString() : null),
+    };
+    state.config = persist
+      ? updateTeamConfig(state.stateDir, terminalConfig)
+      : { ...state.config, ...terminalConfig };
   }
   return state;
 }
@@ -169,7 +183,7 @@ export function teamStatus(cwd, name, run = spawnSync) {
 export async function awaitTeam(cwd, name, timeoutMs = 3_600_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const state = teamStatus(cwd, name);
+    const state = reconcileTeam(cwd, name);
     if (state.workers.every((worker) => ['completed', 'failed', 'cancelled'].includes(worker.status))) return state;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
@@ -302,7 +316,7 @@ export function assignTeamTask(cwd, name, workerName, description, dependsOn = [
 }
 
 export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
-  const state = teamStatus(cwd, name, run);
+  const state = reconcileTeam(cwd, name, run);
   if (state.config.status === 'running') throw new Error('team still has running or queued work; await completion before integration.');
   const leaderStatus = run('git', ['status', '--porcelain'], { cwd: state.config.cwd, encoding: 'utf8' });
   if (leaderStatus.status !== 0) throw new Error(String(leaderStatus.stderr || 'failed to inspect leader workspace').trim());
