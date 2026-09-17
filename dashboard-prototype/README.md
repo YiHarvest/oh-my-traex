@@ -18,6 +18,11 @@ Live runtime mode:
 node dashboard-prototype/live-server.js --repo /path/to/git/repository --port 4173
 ```
 
+The live server prints a per-process URL containing a random capability token.
+Open that exact URL; the browser removes the token from its address bar after
+bootstrapping. API calls require the token, mutating calls also require a
+same-origin request, and the page sends restrictive browser security headers.
+
 The live server reads `.git/otx/team`, captures owned tmux worker panes, and
 streams config, tasks, workers, heartbeat health, mailbox state, integration
 state, and terminal output. It binds only to `127.0.0.1`.
@@ -35,7 +40,9 @@ Interactions:
 In live mode, **Launch Task**, **Message**, **Assign**, **Stop**, and **Add Node**
 call the restricted local runtime API. The API exposes only start, stop, send,
 assign, integrate, and add-worker operations scoped to the repository supplied
-at server startup; it does not expose an arbitrary command endpoint.
+at server startup; it does not expose an arbitrary command endpoint. Stopping a
+Dashboard-created tmux session additionally verifies session, team, leader, and
+run-ID ownership before killing the session.
 
 The current interaction model follows the same operational principles as the
 oh-my-codex Team HUD: a persistent runtime summary, Team-grouped tasks, direct

@@ -1,5 +1,8 @@
 import { actionAvailability, buildWorkerActionPayload, nextWrappedIndex, parseDependencyIds, summarizeRuntime } from './ui-model.js';
 
+const dashboardToken = new URLSearchParams(window.location.hash.slice(1)).get('token') || '';
+if (dashboardToken) history.replaceState(null, '', window.location.pathname + window.location.search);
+
 const initialTasks = [
   {
     id: 1, title: 'Implement user authentication', status: 'working', created: '12m ago', model: 'gpt-5.3-codex',
@@ -433,8 +436,8 @@ function updateConnectionBadge(mode, detail) {
 }
 
 async function callAction(payload) {
-  const response = await fetch('/api/actions', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+  const response = await fetch('/api/actions?token=' + encodeURIComponent(dashboardToken), {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-otx-token': dashboardToken }, body: JSON.stringify(payload),
   });
   const result = await response.json();
   if (!response.ok || !result.ok) throw new Error(result.error || 'Dashboard action failed.');
@@ -443,7 +446,7 @@ async function callAction(payload) {
 
 function connectLiveStream() {
   if (!state.connected) updateConnectionBadge('connecting', 'Opening SSE connection');
-  const stream = new EventSource('/api/events');
+  const stream = new EventSource('/api/events?token=' + encodeURIComponent(dashboardToken));
   stream.addEventListener('snapshot', function (event) {
     try { applyLiveSnapshot(JSON.parse(event.data)); }
     catch (error) { showToast('Invalid live snapshot: ' + error.message); }
