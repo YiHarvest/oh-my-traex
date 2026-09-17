@@ -178,6 +178,9 @@ Mailbox 投递使用一次性 receipt token，避免并发 worker 重复消费�
 
 ```bash
 npm test
+npm run test:coverage
+npm run test:stress
+npm run pack:check
 npm run doctor
 npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"
