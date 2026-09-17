@@ -178,6 +178,9 @@ Mailbox delivery uses one-time receipt tokens so concurrent consumers cannot pro
 
 ```bash
 npm test
+npm run test:coverage
+npm run test:stress
+npm run pack:check
 npm run doctor
 npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"

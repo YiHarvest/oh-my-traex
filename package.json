@@ -2,12 +2,23 @@
   "name": "oh-my-traex",
   "version": "0.4.0",
   "description": "Native and durable multi-agent orchestration for TraeX",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YiHarvest/oh-my-traex.git"
+  },
+  "homepage": "https://github.com/YiHarvest/oh-my-traex#readme",
+  "bugs": {
+    "url": "https://github.com/YiHarvest/oh-my-traex/issues"
+  },
   "type": "module",
   "bin": {
     "otx": "src/cli.js"
   },
   "scripts": {
     "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=65 --test-coverage-branches=65 --test-coverage-functions=65",
+    "test:stress": "node --test --test-name-pattern=64 test/team-state.test.js test/team-events.test.js",
+    "pack:check": "node scripts/verify-package.mjs",
     "doctor": "node src/cli.js doctor",
     "prompt": "node src/cli.js prompt"
   },
@@ -17,13 +28,14 @@
   "files": [
     "src/",
     "dashboard-prototype/",
-    "assets/oh-my-traex-architecture.html",
-    "assets/oh-my-traex-architecture.png",
-    "docs/oh-my-traex.architecture.json",
     "README.md",
     "README.en.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "keywords": [
     "traex",
     "traecode",
