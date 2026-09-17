@@ -31,6 +31,13 @@ test('parses explicit team reconciliation', () => {
   assert.equal(parsed.options.json, true);
 });
 
+test('parses team transaction recovery', () => {
+  const parsed = parseTeamArgs(['recover', 'auth-team', '-C', '/repo']);
+  assert.equal(parsed.subcommand, 'recover');
+  assert.equal(parsed.name, 'auth-team');
+  assert.equal(parsed.options.cwd, '/repo');
+});
+
 test('parses team resume model override', () => {
   const parsed = parseTeamArgs(['resume', 'auth-team', '--model', 'GPT-5.6-Sol']);
   assert.equal(parsed.subcommand, 'resume');

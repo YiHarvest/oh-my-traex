@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { buildLeaderPrompt, buildWorkerPrompt } from './prompt.js';
 import { planTeam } from './planner.js';
-import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, removeTeamWorker, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState } from './state.js';
+import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, removeTeamWorker, sanitizeTeamName, teamStateDir, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState, withStateLock } from './state.js';
 import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktree, createWorkerWorktrees, inspectWorkerWorktree, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
+import { beginTeamTransaction, finishTeamTransaction, listTeamTransactions, updateTeamTransaction } from './transaction.js';
 
 export async function startTeam({ cwd, task, workerCount, model, teamName, baseRole, autoPlan = true, plannerTimeoutMs, env = process.env, run = spawnSync }) {
   if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team requires running inside tmux.');
@@ -26,6 +27,8 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
   const repoRoot = repoRootResult.stdout.trim();
   assertCleanWorkspace(repoRoot);
   assertTeamDoesNotExist(repoRoot, name);
+  const statePath = teamStateDir(repoRoot, name);
+  const transaction = beginTeamTransaction(statePath, 'start-team', { team: name, cwd: repoRoot });
   let plan = null;
   let plannerFallback = null;
   let planningMode = 'static';
@@ -39,7 +42,14 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       planningMode = 'fallback';
     }
   }
-  const worktreeWorkers = createWorkerWorktrees({ repoRoot, teamName: name, workers });
+  let worktreeWorkers = [];
+  try {
+    worktreeWorkers = createWorkerWorktrees({ repoRoot, teamName: name, workers });
+    updateTeamTransaction(transaction, { phase: 'worktrees-created', resources: { workers: worktreeWorkers } });
+  } catch (error) {
+    finishTeamTransaction(transaction, 'rolled-back', { error: error.message });
+    throw error;
+  }
   const leaderSessionId = randomUUID();
   let stateDir;
   let config;
@@ -56,8 +66,10 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       leaderSessionId,
       workers: worktreeWorkers,
     }));
+    updateTeamTransaction(transaction, { phase: 'state-published', run_id: config.run_id });
   } catch (error) {
     rollbackWorkerWorktrees(repoRoot, worktreeWorkers);
+    finishTeamTransaction(transaction, 'rolled-back', { error: error.message });
     throw error;
   }
   const runner = join(dirname(fileURLToPath(import.meta.url)), 'worker-run.js');
@@ -85,8 +97,17 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       run('tmux', ['select-pane', '-t', paneId, '-T', `${worker.name} [${worker.role}]`], { encoding: 'utf8' });
       const panePid = readPanePid(run, paneId);
       updateWorkerState(stateDir, worker.name, { pane_id: paneId, pane_pid: panePid, session_id: sessionId, result_path: resultPath, prompt_path: promptPath });
+      updateTeamTransaction(transaction, {
+        phase: 'panes-starting',
+        resources: {
+          workers: transaction.record.resources.workers.map((candidate) => candidate.name === worker.name
+            ? { ...candidate, pane_id: paneId, pane_pid: panePid, session_id: sessionId }
+            : candidate),
+        },
+      });
     }
     run('tmux', ['select-layout', '-t', env.TMUX_PANE, 'main-vertical'], { encoding: 'utf8' });
+    finishTeamTransaction(transaction);
     return {
       name,
       stateDir,
@@ -102,6 +123,7 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       error: error.message,
       cleanup_debt: cleanupDebt,
     });
+    finishTeamTransaction(transaction, 'rolled-back', { error: error.message, cleanup_debt: cleanupDebt });
     throw error;
   }
 }
@@ -416,7 +438,12 @@ export function cleanupTeam(cwd, name) {
   return { ok: complete, results };
 }
 
-export function addWorker(cwd, name, role, assignment, { model, env = process.env, run = spawnSync } = {}) {
+export function addWorker(cwd, name, role, assignment, options = {}) {
+  const state = readTeamState(cwd, name);
+  return withStateLock(state.stateDir, 'team-membership', () => addWorkerLocked(cwd, name, role, assignment, options));
+}
+
+function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env, run = spawnSync } = {}) {
   if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team add-worker requires running inside tmux.');
   const state = teamStatus(cwd, name, run);
   if (['stopped', 'cleaned', 'cleanup_pending'].includes(state.config.status)) {
@@ -433,11 +460,14 @@ export function addWorker(cwd, name, role, assignment, { model, env = process.en
     requires_commit: ['executor', 'test-engineer'].includes(role),
     status: 'starting',
   };
-  const worker = createWorkerWorktree({ repoRoot: state.config.cwd, teamName: name, worker: workerBase });
+  const transaction = beginTeamTransaction(state.stateDir, 'add-worker', { team: name, worker: workerBase.name });
+  let worker;
   let task;
   let paneId = null;
   let membershipAdded = false;
   try {
+    worker = createWorkerWorktree({ repoRoot: state.config.cwd, teamName: name, worker: workerBase });
+    updateTeamTransaction(transaction, { phase: 'worktree-created', resources: { workers: [worker] } });
     task = addTeamWorker(state.stateDir, worker);
     membershipAdded = true;
     worker.initial_task_id = task.id;
@@ -466,21 +496,80 @@ export function addWorker(cwd, name, role, assignment, { model, env = process.en
       result_path: resultPath,
       prompt_path: promptPath,
     });
+    updateTeamTransaction(transaction, {
+      phase: 'pane-started',
+      resources: { workers: [{ ...worker, pane_id: paneId, pane_pid: updated.pane_pid, session_id: sessionId }] },
+    });
     run('tmux', ['select-layout', '-t', env.TMUX_PANE, 'main-vertical'], { encoding: 'utf8' });
+    finishTeamTransaction(transaction);
     return { worker: updated, task };
   } catch (error) {
     if (paneId?.startsWith('%')) run('tmux', ['kill-pane', '-t', paneId], { encoding: 'utf8' });
     if (task) updateTaskState(state.stateDir, task.id, {
       status: 'failed', error: error.message, completed_at: new Date().toISOString(),
     });
-    updateWorkerState(state.stateDir, worker.name, {
+    if (membershipAdded) updateWorkerState(state.stateDir, worker.name, {
       status: 'failed', error: error.message, completed_at: new Date().toISOString(),
     });
     if (membershipAdded) removeTeamWorker(state.stateDir, worker.name);
-    const cleanupDebt = rollbackWorkerWorktrees(state.config.cwd, [worker]);
+    const cleanupDebt = worker ? rollbackWorkerWorktrees(state.config.cwd, [worker]) : [];
     if (cleanupDebt.length > 0) updateTeamConfig(state.stateDir, { cleanup_debt: cleanupDebt });
+    finishTeamTransaction(transaction, 'rolled-back', { error: error.message, cleanup_debt: cleanupDebt });
     throw error;
   }
+}
+
+export function recoverTeam(cwd, name, run = spawnSync) {
+  const stateDir = teamStateDir(cwd, name);
+  const transactions = listTeamTransactions(stateDir, { activeOnly: true });
+  if (transactions.length === 0) return { ok: true, recovered: [], cleanup_debt: [] };
+  let state = null;
+  try { state = readTeamState(cwd, name); } catch {}
+  const repoRoot = state?.config.cwd || cwd;
+  const recovered = [];
+  const cleanupDebt = [];
+  let requiresAttention = false;
+  for (const record of transactions) {
+    const transaction = { stateDir, id: record.id, record };
+    const resources = dedupeWorkers(record.resources?.workers || []);
+    for (const resource of resources) {
+      const persisted = state?.workers.find((worker) => worker.name === resource.name);
+      const worker = { ...resource, ...persisted };
+      if (state && inspectPaneOwnership(run, worker, state.config) === 'owned') {
+        run('tmux', ['kill-pane', '-t', worker.pane_id], { encoding: 'utf8' });
+      }
+      if (persisted && !['completed', 'failed', 'cancelled'].includes(persisted.status)) {
+        updateWorkerState(stateDir, worker.name, {
+          status: 'failed', error: 'recovered incomplete runtime transaction', completed_at: new Date().toISOString(),
+        });
+        if (persisted.initial_task_id) updateTaskState(stateDir, persisted.initial_task_id, {
+          status: 'failed', claim: null, error: 'recovered incomplete runtime transaction', completed_at: new Date().toISOString(),
+        });
+      }
+    }
+    const transactionCleanupDebt = rollbackWorkerWorktrees(repoRoot, resources);
+    cleanupDebt.push(...transactionCleanupDebt);
+    if (record.operation === 'add-worker' && state) {
+      for (const resource of resources) {
+        const stillPresent = readTeamState(cwd, name).config.workers.includes(resource.name);
+        const preserved = transactionCleanupDebt.some((item) => item.worker === resource.name);
+        if (stillPresent && !preserved) removeTeamWorker(stateDir, resource.name);
+      }
+    }
+    if (record.operation === 'start-team' || transactionCleanupDebt.length > 0) requiresAttention = true;
+    finishTeamTransaction(transaction, 'recovered', { cleanup_debt: transactionCleanupDebt });
+    recovered.push(record.id);
+  }
+  if (state) updateTeamConfig(stateDir, {
+    status: requiresAttention ? 'recovery_required' : state.config.status,
+    recovered_at: new Date().toISOString(),
+    cleanup_debt: cleanupDebt,
+  });
+  return { ok: cleanupDebt.length === 0, recovered, cleanup_debt: cleanupDebt };
+}
+
+function dedupeWorkers(workers) {
+  return [...new Map(workers.map((worker) => [worker.name, worker])).values()];
 }
 
 export function removeWorker(cwd, name, workerName, run = spawnSync) {

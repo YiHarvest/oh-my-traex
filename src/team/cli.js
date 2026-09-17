@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { addWorker, assignTeamTask, awaitTeam, broadcastTeamMessage, cleanupTeam, diagnoseTeam, integrateTeam, listTasks, readTeamMailbox, reconcileTeam, removeWorker, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
+import { addWorker, assignTeamTask, awaitTeam, broadcastTeamMessage, cleanupTeam, diagnoseTeam, integrateTeam, listTasks, readTeamMailbox, reconcileTeam, recoverTeam, removeWorker, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
 import { listTeamStates } from './state.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
@@ -9,7 +9,7 @@ const TEAM_HELP = `oh-my-traex durable team runtime
 Usage:
   otx team [N:role] [--name NAME] [--model MODEL] [--no-plan] [--planner-timeout-ms N] [-C DIR] "task"
   otx team list [-C DIR] [--json]
-  otx team status|reconcile|await|resume|stop|cleanup <name> [-C DIR]
+  otx team status|reconcile|recover|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose <name> [-C DIR]
   otx team add-worker <name> <role> [-C DIR] -- "assignment"
   otx team remove-worker <name> <worker> [-C DIR]
@@ -21,7 +21,7 @@ Usage:
 
 export function parseTeamArgs(args) {
   const tokens = [...args];
-  const subcommand = ['list', 'tasks', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'status', 'reconcile', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
+  const subcommand = ['list', 'tasks', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'status', 'reconcile', 'recover', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
   const options = { workers: 3, cwd: process.cwd(), timeoutMs: 3_600_000 };
   if (subcommand === 'list') {
     parseOptions(tokens, options);
@@ -185,6 +185,11 @@ export async function runTeamCommand(args) {
   }
   if (parsed.subcommand === 'status') return printStatus(teamStatus(cwd, parsed.name), parsed.options.json);
   if (parsed.subcommand === 'reconcile') return printStatus(reconcileTeam(cwd, parsed.name), parsed.options.json);
+  if (parsed.subcommand === 'recover') {
+    const result = recoverTeam(cwd, parsed.name);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result.ok ? 0 : 1;
+  }
   if (parsed.subcommand === 'stop') {
     printStatus(stopTeam(cwd, parsed.name), parsed.options.json);
     return 0;
