@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { acknowledgeMailboxMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, readMailbox, renewTaskClaim, updateMailboxMessage, updateWorkerState } from './state.js';
+import { acknowledgeMailboxMessage, claimTaskMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, readMailbox, renewMailboxDelivery, renewTaskClaim, updateMailboxMessage, updateWorkerState } from './state.js';
 import { buildWorkerExecArgs, buildWorkerResumeArgs, detectTraeCapabilities } from './trae.js';
 import { appendTeamEvent } from './events.js';
 
@@ -15,6 +15,7 @@ const initialTaskId = String(initialState.initial_task_id || initialState.index)
 updateWorkerState(stateDir, workerName, { status: 'starting', started_at: new Date().toISOString(), pid: process.pid });
 const initialClaim = await waitForInitialClaim();
 let activeClaim = { taskId: initialTaskId, token: initialClaim.token };
+let activeDelivery = null;
 updateWorkerState(stateDir, workerName, { status: 'working', blocked_task_ids: [] });
 
 let activeSessionId = sessionId;
@@ -24,6 +25,7 @@ let child = launchTrae(buildWorkerExecArgs({
 const heartbeat = setInterval(() => {
   updateWorkerState(stateDir, workerName, { heartbeat_at: new Date().toISOString() });
   if (activeClaim) renewTaskClaim(stateDir, activeClaim.taskId, workerName, activeClaim.token);
+  if (activeDelivery) renewMailboxDelivery(stateDir, workerName, activeDelivery.messageId, activeDelivery.token);
 }, 5000);
 const forwardSignal = (signal) => {
   if (!child.killed) child.kill(signal);
@@ -93,6 +95,7 @@ while (true) {
   }
   const { message, taskClaim, receiptToken } = selected;
   activeClaim = taskClaim ? { taskId: message.task_id, token: taskClaim.token } : null;
+  activeDelivery = { messageId: message.id, token: receiptToken };
   appendTeamEvent(stateDir, 'message.delivered', { actor: workerName, data: { message_id: message.id, task_id: message.task_id } });
   updateWorkerState(stateDir, workerName, {
     status: 'working',
@@ -175,6 +178,7 @@ while (true) {
     actor: workerName, data: { message_id: message.id, task_id: message.task_id, commit: followupCommitSha },
   });
   activeClaim = null;
+  activeDelivery = null;
   updateWorkerState(stateDir, workerName, {
     status: persistedFollowupStatus,
     current_message_id: null,
@@ -196,13 +200,13 @@ function selectPendingMessage() {
       if (delivery.ok) return { message: delivery.message, taskClaim: null, receiptToken: delivery.token };
       continue;
     }
-    const taskClaim = claimTeamTask(stateDir, message.task_id, workerName);
-    if (taskClaim.ok) {
-      const delivery = acknowledgeMailboxMessage(stateDir, workerName, message.id);
-      if (delivery.ok) return { message: delivery.message, taskClaim, receiptToken: delivery.token };
-      updateTaskStateAfterDeliveryRace(message, taskClaim);
-      continue;
-    }
+    const claimed = claimTaskMessage(stateDir, workerName, message.id);
+    if (claimed.ok) return {
+      message: claimed.message,
+      taskClaim: { token: claimed.token, task: claimed.task },
+      receiptToken: claimed.receiptToken,
+    };
+    const taskClaim = claimed;
     if (taskClaim.error === 'blocked_dependency') {
       blockedTaskIds.push(message.task_id);
       continue;
@@ -220,12 +224,6 @@ function selectPendingMessage() {
     });
   }
   return null;
-}
-
-function updateTaskStateAfterDeliveryRace(message, taskClaim) {
-  completeClaimedTask(stateDir, message.task_id, workerName, taskClaim.token, {
-    status: 'pending', claim: null, error: null, completed_at: null,
-  });
 }
 
 function launchTrae(args) {

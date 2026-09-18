@@ -3,6 +3,9 @@ import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
+export const TASK_LEASE_MS = 15 * 60_000;
+export const MAILBOX_LEASE_MS = 15 * 60_000;
+
 export function sanitizeTeamName(value) {
   const name = value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30).replace(/-$/, '');
   if (!name) throw new Error('team name must contain a letter or number.');
@@ -216,7 +219,7 @@ export function claimTeamTask(stateDir, taskId, workerName) {
       status: 'in_progress',
       owner: workerName,
       blocked_by: [],
-      claim: { owner: workerName, token, leased_until: new Date(Date.now() + 15 * 60_000).toISOString() },
+      claim: { owner: workerName, token, leased_until: new Date(Date.now() + TASK_LEASE_MS).toISOString() },
       version: (task.version || 1) + 1,
       started_at: task.started_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -301,12 +304,32 @@ export function renewTaskClaim(stateDir, taskId, workerName, token) {
     }
     const renewed = {
       ...task,
-      claim: { ...task.claim, leased_until: new Date(Date.now() + 15 * 60_000).toISOString() },
+      claim: { ...task.claim, leased_until: new Date(Date.now() + TASK_LEASE_MS).toISOString() },
       version: (task.version || 1) + 1,
       updated_at: new Date().toISOString(),
     };
     writeJsonAtomic(taskStatePath(stateDir, taskId), renewed);
     return { ok: true, task: renewed };
+  });
+}
+
+export function abandonTaskClaim(stateDir, taskId, workerName, token) {
+  return withTaskLock(stateDir, taskId, () => {
+    const task = readTeamTask(stateDir, taskId);
+    if (task.claim?.owner !== workerName || task.claim?.token !== token) {
+      return { ok: false, error: 'claim_mismatch', task };
+    }
+    const abandoned = {
+      ...task,
+      status: 'pending',
+      claim: null,
+      error: null,
+      completed_at: null,
+      version: (task.version || 1) + 1,
+      updated_at: new Date().toISOString(),
+    };
+    writeJsonAtomic(taskStatePath(stateDir, taskId), abandoned);
+    return { ok: true, task: abandoned };
   });
 }
 
@@ -357,7 +380,12 @@ export function acknowledgeMailboxMessage(stateDir, workerName, messageId) {
     const current = readJson(path);
     if (current.status !== 'pending') return { ok: false, error: 'message_not_pending', message: current };
     const acknowledgedAt = new Date().toISOString();
-    const receipt = { token: randomUUID(), worker: workerName, acknowledged_at: acknowledgedAt };
+    const receipt = {
+      token: randomUUID(),
+      worker: workerName,
+      acknowledged_at: acknowledgedAt,
+      leased_until: new Date(Date.now() + MAILBOX_LEASE_MS).toISOString(),
+    };
     const updated = {
       ...current,
       status: 'working',
@@ -380,10 +408,175 @@ export function completeMailboxDelivery(stateDir, workerName, messageId, receipt
       return { ok: false, error: 'receipt_mismatch', message: current };
     }
     if (current.status !== 'working') return { ok: false, error: 'delivery_not_active', message: current };
+    if (Date.parse(current.receipt.leased_until) <= Date.now()) {
+      return { ok: false, error: 'lease_expired', message: current };
+    }
     const updated = { ...current, ...updates, receipt: current.receipt, updated_at: new Date().toISOString() };
     writeJsonAtomic(path, updated);
     return { ok: true, message: updated };
   });
+}
+
+export function renewMailboxDelivery(stateDir, workerName, messageId, receiptToken) {
+  const path = mailboxMessagePath(stateDir, workerName, messageId);
+  if (!existsSync(path)) throw new Error(`mailbox message not found: ${messageId}`);
+  return withRecordLock(stateDir, `mailbox-${messageId}`, () => {
+    const current = readJson(path);
+    if (current.status !== 'working' || current.receipt?.worker !== workerName
+      || current.receipt?.token !== receiptToken) {
+      return { ok: false, error: 'receipt_mismatch', message: current };
+    }
+    const updated = {
+      ...current,
+      receipt: { ...current.receipt, leased_until: new Date(Date.now() + MAILBOX_LEASE_MS).toISOString() },
+      updated_at: new Date().toISOString(),
+    };
+    writeJsonAtomic(path, updated);
+    return { ok: true, message: updated };
+  });
+}
+
+export function reclaimExpiredMailboxDelivery(stateDir, workerName, messageId) {
+  const path = mailboxMessagePath(stateDir, workerName, messageId);
+  if (!existsSync(path)) throw new Error(`mailbox message not found: ${messageId}`);
+  return withRecordLock(stateDir, `mailbox-${messageId}`, () => {
+    const current = readJson(path);
+    if (current.status !== 'working' || !current.receipt) {
+      return { ok: true, reclaimed: false, message: current };
+    }
+    if (Date.parse(current.receipt.leased_until) > Date.now()) {
+      return { ok: false, error: 'lease_active', message: current };
+    }
+    const exhausted = (current.delivery_attempts || 0) >= 3;
+    const now = new Date().toISOString();
+    const updated = {
+      ...current,
+      status: exhausted ? 'failed' : 'pending',
+      receipt: null,
+      error: exhausted ? 'mailbox delivery attempts exhausted' : null,
+      completed_at: exhausted ? now : null,
+      reclaimed_at: now,
+      updated_at: now,
+    };
+    writeJsonAtomic(path, updated);
+    return { ok: true, reclaimed: true, exhausted, message: updated };
+  });
+}
+
+export function abandonMailboxDelivery(stateDir, workerName, messageId, receiptToken) {
+  const path = mailboxMessagePath(stateDir, workerName, messageId);
+  if (!existsSync(path)) return { ok: true, abandoned: false };
+  return withRecordLock(stateDir, `mailbox-${messageId}`, () => {
+    const current = readJson(path);
+    if (current.status !== 'working' || current.receipt?.worker !== workerName
+      || current.receipt?.token !== receiptToken) {
+      return { ok: false, error: 'receipt_mismatch', message: current };
+    }
+    const updated = {
+      ...current,
+      status: 'pending',
+      receipt: null,
+      error: null,
+      completed_at: null,
+      updated_at: new Date().toISOString(),
+    };
+    writeJsonAtomic(path, updated);
+    return { ok: true, abandoned: true, message: updated };
+  });
+}
+
+export function claimTaskMessage(stateDir, workerName, messageId) {
+  const path = mailboxMessagePath(stateDir, workerName, messageId);
+  if (!existsSync(path)) throw new Error(`mailbox message not found: ${messageId}`);
+  const current = readJson(path);
+  if (!current.task_id) return { ok: false, error: 'message_has_no_task', message: current };
+  const lockNames = [`mailbox-${messageId}`, `task-${current.task_id}`].sort();
+  return withOrderedRecordLocks(stateDir, lockNames, () => {
+    const message = readJson(path);
+    if (message.status !== 'pending') return { ok: false, error: 'message_not_pending', message };
+    let task = readTeamTask(stateDir, message.task_id);
+    if (task.status === 'in_progress' && task.claim && Date.parse(task.claim.leased_until) <= Date.now()) {
+      task = { ...task, status: 'pending', claim: null };
+    }
+    if (task.status !== 'pending' && task.status !== 'blocked') {
+      return { ok: false, error: 'task_not_pending', task, message };
+    }
+    if (task.owner && task.owner !== workerName) return { ok: false, error: 'owner_mismatch', task, message };
+    const incomplete = (task.depends_on || []).filter((dependencyId) =>
+      readTeamTask(stateDir, dependencyId).status !== 'completed',
+    );
+    if (incomplete.length > 0) {
+      if (task.status !== 'blocked' || JSON.stringify(task.blocked_by || []) !== JSON.stringify(incomplete)) {
+        task = {
+          ...task, status: 'blocked', blocked_by: incomplete,
+          version: (task.version || 1) + 1, updated_at: new Date().toISOString(),
+        };
+        writeJsonAtomic(taskStatePath(stateDir, task.id), task);
+      }
+      return { ok: false, error: 'blocked_dependency', dependencies: incomplete, task, message };
+    }
+    const now = new Date().toISOString();
+    const token = randomUUID();
+    const leasedUntil = new Date(Date.now() + TASK_LEASE_MS).toISOString();
+    const claimedTask = {
+      ...task, status: 'in_progress', owner: workerName, blocked_by: [],
+      claim: { owner: workerName, token, leased_until: leasedUntil },
+      version: (task.version || 1) + 1, started_at: task.started_at || now, updated_at: now,
+    };
+    const receiptToken = randomUUID();
+    const claimedMessage = {
+      ...message, status: 'working', delivery_attempts: (message.delivery_attempts || 0) + 1,
+      delivered_at: now,
+      receipt: { token: receiptToken, worker: workerName, acknowledged_at: now, leased_until: leasedUntil },
+      updated_at: now,
+    };
+    const transaction = beginDeliveryTransaction(stateDir, {
+      workerName, messageId, taskId: task.id, task: claimedTask, message: claimedMessage,
+    });
+    try {
+      writeJsonAtomic(taskStatePath(stateDir, task.id), claimedTask);
+      writeJsonAtomic(path, claimedMessage);
+      finishDeliveryTransaction(transaction);
+    } catch (error) {
+      writeJsonAtomic(taskStatePath(stateDir, task.id), task);
+      writeJsonAtomic(path, message);
+      throw error;
+    }
+    return { ok: true, task: claimedTask, message: claimedMessage, token, receiptToken };
+  });
+}
+
+export function recoverDeliveryTransactions(stateDir) {
+  const directory = join(stateDir, 'delivery-transactions');
+  if (!existsSync(directory)) return [];
+  const recovered = [];
+  for (const name of readdirSync(directory).filter((entry) => entry.endsWith('.json'))) {
+    const path = join(directory, name);
+    const transaction = readJson(path);
+    if (transaction.status !== 'active') continue;
+    const lockNames = [`mailbox-${transaction.message_id}`, `task-${transaction.task_id}`].sort();
+    withOrderedRecordLocks(stateDir, lockNames, () => {
+      writeJsonAtomic(taskStatePath(stateDir, transaction.task_id), transaction.task);
+      writeJsonAtomic(mailboxMessagePath(stateDir, transaction.worker, transaction.message_id), transaction.message);
+      writeJsonAtomic(path, { ...transaction, status: 'recovered', recovered_at: new Date().toISOString() });
+    });
+    recovered.push(transaction.id);
+  }
+  return recovered;
+}
+
+function beginDeliveryTransaction(stateDir, { workerName, messageId, taskId, task, message }) {
+  const transaction = {
+    schema_version: 1, id: randomUUID(), status: 'active', worker: workerName,
+    message_id: messageId, task_id: taskId, task, message, created_at: new Date().toISOString(),
+  };
+  const path = join(stateDir, 'delivery-transactions', `${transaction.id}.json`);
+  writeJsonAtomic(path, transaction);
+  return { path, transaction };
+}
+
+function finishDeliveryTransaction({ path, transaction }) {
+  writeJsonAtomic(path, { ...transaction, status: 'committed', completed_at: new Date().toISOString() });
 }
 
 export function updateTeamConfig(stateDir, updates) {
@@ -477,6 +670,11 @@ function readJson(path) {
 
 function withTaskLock(stateDir, taskId, callback) {
   return withRecordLock(stateDir, `task-${taskId}`, callback);
+}
+
+function withOrderedRecordLocks(stateDir, names, callback, index = 0) {
+  if (index >= names.length) return callback();
+  return withStateLock(stateDir, names[index], () => withOrderedRecordLocks(stateDir, names, callback, index + 1));
 }
 
 export function withStateLock(stateDir, recordName, callback) {

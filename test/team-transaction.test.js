@@ -47,7 +47,7 @@ test('recovers an interrupted add-worker transaction idempotently', () => {
     assert.deepEqual(readTeamState(repo, 'demo').config.workers, ['worker-1']);
     assert.equal(readTeamState(repo, 'demo').config.status, 'running');
     assert.equal(listTeamTransactions(initialized.stateDir, { activeOnly: true }).length, 0);
-    assert.deepEqual(recoverTeam(repo, 'demo'), { ok: true, recovered: [], cleanup_debt: [] });
+    assert.deepEqual(recoverTeam(repo, 'demo'), { ok: true, recovered: [], recovered_deliveries: [], cleanup_debt: [] });
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
@@ -74,7 +74,7 @@ test('recovers an interrupted start-team before config publication', () => {
     assert.equal(existsSync(worker.worktree_path), false);
     assert.equal(spawnSync('git', ['show-ref', '--verify', '--quiet', 'refs/heads/otx/demo/worker-1'], { cwd: repo }).status, 1);
     assert.equal(listTeamTransactions(stateDir, { activeOnly: true }).length, 0);
-    assert.deepEqual(recoverTeam(repo, 'demo'), { ok: true, recovered: [], cleanup_debt: [] });
+    assert.deepEqual(recoverTeam(repo, 'demo'), { ok: true, recovered: [], recovered_deliveries: [], cleanup_debt: [] });
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
