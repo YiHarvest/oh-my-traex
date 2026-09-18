@@ -110,6 +110,29 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
         },
       });
     }
+    const supervisorCommand = shellJoin([
+      process.execPath, cliPath, 'team', 'supervise', name, '-C', repoRoot,
+      '--interval-ms', '1000',
+    ]);
+    const supervisorWindow = run('tmux', [
+      'new-window', '-d', '-P', '-F', '#{pane_id}', '-n', `otx-${name}-supervisor`,
+      '-c', repoRoot, supervisorCommand,
+    ], { cwd: repoRoot, encoding: 'utf8' });
+    if (supervisorWindow.status !== 0) {
+      throw new Error(String(supervisorWindow.stderr || 'failed to create supervisor window').trim());
+    }
+    const supervisorPaneId = supervisorWindow.stdout.trim().split('\n')[0];
+    if (!supervisorPaneId.startsWith('%')) throw new Error('tmux did not return a supervisor pane ID.');
+    createdPanes.push(supervisorPaneId);
+    runTmuxOrThrow(run, ['set-option', '-p', '-t', supervisorPaneId, '@otx_team', name]);
+    runTmuxOrThrow(run, ['set-option', '-p', '-t', supervisorPaneId, '@otx_worker', 'supervisor']);
+    runTmuxOrThrow(run, ['set-option', '-p', '-t', supervisorPaneId, '@otx_run_id', config.run_id]);
+    const supervisorPanePid = readPanePid(run, supervisorPaneId);
+    Object.assign(config, updateTeamConfig(stateDir, {
+      supervisor_pane_id: supervisorPaneId,
+      supervisor_pane_pid: supervisorPanePid,
+      supervisor_started_at: new Date().toISOString(),
+    }));
     run('tmux', ['select-layout', '-t', env.TMUX_PANE, 'main-vertical'], { encoding: 'utf8' });
     finishTeamTransaction(transaction);
     appendTeamEvent(stateDir, 'team.started', { data: { workers: worktreeWorkers.map((worker) => worker.name) } });
@@ -254,6 +277,14 @@ export function stopTeam(cwd, name, run = spawnSync) {
       }
     }
     if (paneOwnedBy(run, worker, state.config)) run('tmux', ['kill-pane', '-t', worker.pane_id], { encoding: 'utf8' });
+  }
+  const supervisor = {
+    name: 'supervisor',
+    pane_id: state.config.supervisor_pane_id,
+    pane_pid: state.config.supervisor_pane_pid,
+  };
+  if (paneOwnedBy(run, supervisor, state.config)) {
+    run('tmux', ['kill-pane', '-t', supervisor.pane_id], { encoding: 'utf8' });
   }
   updateTeamConfig(state.stateDir, { status: 'stopped', stopped_at: new Date().toISOString() });
   return teamStatus(cwd, name, run);

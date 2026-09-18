@@ -31,6 +31,14 @@ test('parses explicit team reconciliation', () => {
   assert.equal(parsed.options.json, true);
 });
 
+test('parses team supervisor options', () => {
+  const parsed = parseTeamArgs(['supervise', 'auth-team', '--interval-ms', '250', '--once']);
+  assert.equal(parsed.subcommand, 'supervise');
+  assert.equal(parsed.name, 'auth-team');
+  assert.equal(parsed.options.intervalMs, 250);
+  assert.equal(parsed.options.once, true);
+});
+
 test('parses team transaction recovery', () => {
   const parsed = parseTeamArgs(['recover', 'auth-team', '-C', '/repo']);
   assert.equal(parsed.subcommand, 'recover');

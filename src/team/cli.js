@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { addWorker, assignTeamTask, awaitTeam, broadcastTeamMessage, cleanupTeam, diagnoseTeam, integrateTeam, listTasks, readTeamEvents, readTeamMailbox, reconcileTeam, recoverTeam, removeWorker, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
 import { listTeamStates } from './state.js';
+import { runTeamSupervisor } from './supervisor.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 const TEAM_HELP = `oh-my-traex durable team runtime
@@ -9,7 +10,7 @@ const TEAM_HELP = `oh-my-traex durable team runtime
 Usage:
   otx team [N:role] [--name NAME] [--model MODEL] [--no-plan] [--planner-timeout-ms N] [-C DIR] "task"
   otx team list [-C DIR] [--json]
-  otx team status|reconcile|recover|await|resume|stop|cleanup <name> [-C DIR]
+  otx team status|reconcile|recover|supervise|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose <name> [-C DIR]
   otx team events <name> [--after CURSOR] [--limit N] [-C DIR]
   otx team add-worker <name> <role> [-C DIR] -- "assignment"
@@ -22,7 +23,7 @@ Usage:
 
 export function parseTeamArgs(args) {
   const tokens = [...args];
-  const subcommand = ['list', 'tasks', 'events', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'status', 'reconcile', 'recover', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
+  const subcommand = ['list', 'tasks', 'events', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'status', 'reconcile', 'recover', 'supervise', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
   const options = { workers: 3, cwd: process.cwd(), timeoutMs: 3_600_000 };
   if (subcommand === 'list') {
     parseOptions(tokens, options);
@@ -201,6 +202,14 @@ export async function runTeamCommand(args) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return result.ok ? 0 : 1;
   }
+  if (parsed.subcommand === 'supervise') {
+    const result = await runTeamSupervisor(cwd, parsed.name, {
+      intervalMs: parsed.options.intervalMs,
+      once: parsed.options.once,
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result.cleanup_debt.length === 0 ? 0 : 1;
+  }
   if (parsed.subcommand === 'stop') {
     printStatus(stopTeam(cwd, parsed.name), parsed.options.json);
     return 0;
@@ -257,11 +266,17 @@ function parseOptions(tokens, options) {
     else if (token.startsWith('--after=')) options.after = token.slice(8);
     else if (token === '--limit') options.limit = Number(requireValue(tokens, ++index, token));
     else if (token.startsWith('--limit=')) options.limit = Number(token.slice(8));
+    else if (token === '--interval-ms') options.intervalMs = Number(requireValue(tokens, ++index, token));
+    else if (token.startsWith('--interval-ms=')) options.intervalMs = Number(token.slice(14));
+    else if (token === '--once') options.once = true;
     else throw new Error(`Unknown team option: ${token}`);
   }
   if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1) throw new Error('--timeout-ms must be a positive integer.');
   if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1000)) {
     throw new Error('--limit must be an integer from 1 to 1000.');
+  }
+  if (options.intervalMs !== undefined && (!Number.isInteger(options.intervalMs) || options.intervalMs < 100)) {
+    throw new Error('--interval-ms must be an integer of at least 100.');
   }
 }
 

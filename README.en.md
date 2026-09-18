@@ -150,6 +150,7 @@ Example state tree:
 | `otx team status <name>` | Inspect worker, pane, worktree, commit, and result state |
 | `otx team reconcile <name>` | Explicitly persist dead-worker and terminal Team reconciliation |
 | `otx team recover <name>` | Recover panes, worktrees, and state left by interrupted runtime transactions |
+| `otx team supervise <name> [--once]` | Run the self-healing loop for lease reclaim, transaction recovery, and reconciliation |
 | `otx team events <name> [--after CURSOR] [--limit N]` | Incrementally read the ordered durable Team event stream |
 | `otx team await <name>` | Wait for every worker to reach a terminal state |
 | `otx team send <name> <worker> <message>` | Queue a follow-up for the original worker session |
