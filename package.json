@@ -18,6 +18,7 @@
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=65 --test-coverage-branches=65 --test-coverage-functions=65",
     "test:stress": "node --test --test-name-pattern=64 test/team-state.test.js test/team-events.test.js",
+    "test:e2e:packed": "node scripts/packed-runtime-e2e.mjs",
     "pack:check": "node scripts/verify-package.mjs",
     "doctor": "node src/cli.js doctor",
     "prompt": "node src/cli.js prompt"
