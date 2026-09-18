@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { writeJsonAtomic } from './state.js';
+import { readVersionedRecord } from './codec.js';
 
 export function beginTeamTransaction(stateDir, operation, details = {}) {
   const id = randomUUID();
@@ -43,7 +44,10 @@ export function listTeamTransactions(stateDir, { activeOnly = false } = {}) {
   if (!existsSync(directory)) return [];
   return readdirSync(directory)
     .filter((name) => name.endsWith('.json'))
-    .map((name) => readTransaction(join(directory, name)))
+    .map((name) => {
+      try { return readTransaction(join(directory, name)); } catch { return null; }
+    })
+    .filter(Boolean)
     .filter((record) => !activeOnly || record.status === 'active')
     .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)));
 }
@@ -57,9 +61,5 @@ function transactionPath(stateDir, id) {
 }
 
 function readTransaction(path) {
-  const parsed = JSON.parse(readFileSync(path, 'utf8'));
-  if (parsed.schema_version !== 1 || !parsed.id || !parsed.operation || !parsed.status) {
-    throw new Error(`invalid team transaction: ${path}`);
-  }
-  return parsed;
+  return readVersionedRecord(path, { kind: 'transaction' });
 }
