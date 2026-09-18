@@ -17,6 +17,12 @@ test('parses static no-plan team mode', () => {
   assert.equal(parsed.options.workers, 2);
 });
 
+test('parses headless team mode', () => {
+  const parsed = parseTeamArgs(['--headless', '--workers', '2', 'task']);
+  assert.equal(parsed.options.muxBackend, 'headless');
+  assert.equal(parsed.options.workers, 2);
+});
+
 test('parses team lifecycle subcommands', () => {
   const parsed = parseTeamArgs(['await', 'auth-team', '--timeout-ms', '5000']);
   assert.equal(parsed.subcommand, 'await');

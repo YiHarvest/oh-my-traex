@@ -45,7 +45,7 @@ export function assertTeamDoesNotExist(cwd, name) {
   }
 }
 
-export function initTeamState({ cwd, name, task, model, plan, planningMode, plannerFallback, leaderPaneId, leaderSessionId, workers }) {
+export function initTeamState({ cwd, name, task, model, plan, planningMode, plannerFallback, leaderPaneId, leaderSessionId, muxBackend = 'tmux', workers }) {
   const stateDir = teamStateDir(cwd, name);
   if (existsSync(join(stateDir, 'config.json'))) throw new Error(`team already exists: ${name}`);
   mkdirSync(join(stateDir, 'workers'), { recursive: true });
@@ -65,6 +65,7 @@ export function initTeamState({ cwd, name, task, model, plan, planningMode, plan
     created_at: new Date().toISOString(),
     leader_pane_id: leaderPaneId,
     leader_session_id: leaderSessionId,
+    mux_backend: muxBackend,
     workers: workers.map(({ name: workerName }) => workerName),
     next_worker_index: workers.length + 1,
   };

@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,9 +10,10 @@ import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName,
 import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktree, createWorkerWorktrees, inspectWorkerWorktree, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
 import { beginTeamTransaction, finishTeamTransaction, listTeamTransactions, updateTeamTransaction } from './transaction.js';
 import { appendTeamEvent, listTeamEvents } from './events.js';
+import { createMuxAdapter, inspectRuntimeOwnership, terminateOwnedRuntime } from './mux.js';
 
-export async function startTeam({ cwd, task, workerCount, model, teamName, baseRole, autoPlan = true, plannerTimeoutMs, env = process.env, run = spawnSync }) {
-  if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team requires running inside tmux.');
+export async function startTeam({ cwd, task, workerCount, model, teamName, baseRole, autoPlan = true, plannerTimeoutMs, muxBackend = 'tmux', env = process.env, run = spawnSync, spawnProcess = spawn }) {
+  if (muxBackend === 'tmux' && (!env.TMUX || !env.TMUX_PANE)) throw new Error('otx team requires running inside tmux unless --headless is used.');
   const name = teamName ? sanitizeTeamName(teamName) : defaultTeamName(task);
   const roles = ['executor', 'test-engineer', 'reviewer', 'explorer', 'architect'];
   let workers = Array.from({ length: workerCount }, (_, index) => ({
@@ -63,13 +64,12 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       plan,
       planningMode,
       plannerFallback,
-      leaderPaneId: env.TMUX_PANE,
+      leaderPaneId: muxBackend === 'tmux' ? env.TMUX_PANE : `process:${process.pid}`,
       leaderSessionId,
+      muxBackend,
       workers: worktreeWorkers,
     }));
-    runTmuxOrThrow(run, ['set-option', '-p', '-t', env.TMUX_PANE, '@otx_team', name]);
-    runTmuxOrThrow(run, ['set-option', '-p', '-t', env.TMUX_PANE, '@otx_worker', 'leader']);
-    runTmuxOrThrow(run, ['set-option', '-p', '-t', env.TMUX_PANE, '@otx_run_id', config.run_id]);
+    createMuxAdapter({ backend: muxBackend, run, spawnProcess, leaderPaneId: env.TMUX_PANE }).prepareLeader(config);
     updateTeamTransaction(transaction, { phase: 'state-published', run_id: config.run_id });
   } catch (error) {
     rollbackWorkerWorktrees(repoRoot, worktreeWorkers);
@@ -79,6 +79,7 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
   const runner = join(dirname(fileURLToPath(import.meta.url)), 'worker-run.js');
   const cliPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'cli.js');
   const createdPanes = [];
+  const mux = createMuxAdapter({ backend: muxBackend, run, spawnProcess, leaderPaneId: env.TMUX_PANE });
 
   try {
     for (const worker of worktreeWorkers) {
@@ -89,51 +90,28 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       const resultPath = join(workerDir, 'result.md');
       const sessionId = randomUUID();
       writeFileSync(promptPath, buildWorkerPrompt({ teamName: name, worker, task }), 'utf8');
-      const command = shellJoin([process.execPath, runner, stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, model || '']);
-      const split = run('tmux', ['split-window', worker.index === 1 ? '-h' : '-v', '-d', '-P', '-F', '#{pane_id}', '-t', env.TMUX_PANE, '-c', worker.worktree_path, command], { cwd: repoRoot, encoding: 'utf8' });
-      if (split.status !== 0) throw new Error(String(split.stderr || 'failed to create worker pane').trim());
-      const paneId = split.stdout.trim().split('\n')[0];
-      if (!paneId.startsWith('%')) throw new Error('tmux did not return a worker pane ID.');
-      createdPanes.push(paneId);
-      runTmuxOrThrow(run, ['set-option', '-p', '-t', paneId, '@otx_team', name]);
-      runTmuxOrThrow(run, ['set-option', '-p', '-t', paneId, '@otx_worker', worker.name]);
-      runTmuxOrThrow(run, ['set-option', '-p', '-t', paneId, '@otx_run_id', config.run_id]);
-      run('tmux', ['select-pane', '-t', paneId, '-T', `${worker.name} [${worker.role}]`], { encoding: 'utf8' });
-      const panePid = readPanePid(run, paneId);
-      updateWorkerState(stateDir, worker.name, { pane_id: paneId, pane_pid: panePid, session_id: sessionId, result_path: resultPath, prompt_path: promptPath });
+      const workerArgs = [stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, model || ''];
+      const launched = mux.launchWorker({ cwd: worker.worktree_path, command: process.execPath, args: [runner, ...workerArgs], worker, config });
+      createdPanes.push({ name: worker.name, pane_id: launched.id, pane_pid: launched.pid });
+      updateWorkerState(stateDir, worker.name, { pane_id: launched.id, pane_pid: launched.pid, session_id: sessionId, result_path: resultPath, prompt_path: promptPath });
       updateTeamTransaction(transaction, {
         phase: 'panes-starting',
         resources: {
           workers: transaction.record.resources.workers.map((candidate) => candidate.name === worker.name
-            ? { ...candidate, pane_id: paneId, pane_pid: panePid, session_id: sessionId }
+            ? { ...candidate, pane_id: launched.id, pane_pid: launched.pid, session_id: sessionId }
             : candidate),
         },
       });
     }
-    const supervisorCommand = shellJoin([
-      process.execPath, cliPath, 'team', 'supervise', name, '-C', repoRoot,
-      '--interval-ms', '1000',
-    ]);
-    const supervisorWindow = run('tmux', [
-      'new-window', '-d', '-P', '-F', '#{pane_id}', '-n', `otx-${name}-supervisor`,
-      '-c', repoRoot, supervisorCommand,
-    ], { cwd: repoRoot, encoding: 'utf8' });
-    if (supervisorWindow.status !== 0) {
-      throw new Error(String(supervisorWindow.stderr || 'failed to create supervisor window').trim());
-    }
-    const supervisorPaneId = supervisorWindow.stdout.trim().split('\n')[0];
-    if (!supervisorPaneId.startsWith('%')) throw new Error('tmux did not return a supervisor pane ID.');
-    createdPanes.push(supervisorPaneId);
-    runTmuxOrThrow(run, ['set-option', '-p', '-t', supervisorPaneId, '@otx_team', name]);
-    runTmuxOrThrow(run, ['set-option', '-p', '-t', supervisorPaneId, '@otx_worker', 'supervisor']);
-    runTmuxOrThrow(run, ['set-option', '-p', '-t', supervisorPaneId, '@otx_run_id', config.run_id]);
-    const supervisorPanePid = readPanePid(run, supervisorPaneId);
+    const supervisorArgs = [cliPath, 'team', 'supervise', name, '-C', repoRoot, '--interval-ms', '1000'];
+    const supervisor = mux.launchSupervisor({ cwd: repoRoot, command: process.execPath, args: supervisorArgs, config });
+    createdPanes.push({ name: 'supervisor', pane_id: supervisor.id, pane_pid: supervisor.pid });
     Object.assign(config, updateTeamConfig(stateDir, {
-      supervisor_pane_id: supervisorPaneId,
-      supervisor_pane_pid: supervisorPanePid,
+      supervisor_pane_id: supervisor.id,
+      supervisor_pane_pid: supervisor.pid,
       supervisor_started_at: new Date().toISOString(),
     }));
-    run('tmux', ['select-layout', '-t', env.TMUX_PANE, 'main-vertical'], { encoding: 'utf8' });
+    mux.layout();
     finishTeamTransaction(transaction);
     appendTeamEvent(stateDir, 'team.started', { data: { workers: worktreeWorkers.map((worker) => worker.name) } });
     return {
@@ -144,7 +122,7 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       leaderPrompt: buildLeaderPrompt({ teamName: name, task, stateDir, workers: worktreeWorkers, cliPath }),
     };
   } catch (error) {
-    for (const paneId of createdPanes) run('tmux', ['kill-pane', '-t', paneId], { encoding: 'utf8' });
+    for (const owner of createdPanes) mux.terminate(owner);
     const cleanupDebt = rollbackWorkerWorktrees(repoRoot, worktreeWorkers);
     if (stateDir) updateTeamConfig(stateDir, {
       status: 'failed',
@@ -276,16 +254,14 @@ export function stopTeam(cwd, name, run = spawnSync) {
         });
       }
     }
-    if (paneOwnedBy(run, worker, state.config)) run('tmux', ['kill-pane', '-t', worker.pane_id], { encoding: 'utf8' });
+    terminateOwnedRuntime(run, worker, state.config);
   }
   const supervisor = {
     name: 'supervisor',
     pane_id: state.config.supervisor_pane_id,
     pane_pid: state.config.supervisor_pane_pid,
   };
-  if (paneOwnedBy(run, supervisor, state.config)) {
-    run('tmux', ['kill-pane', '-t', supervisor.pane_id], { encoding: 'utf8' });
-  }
+  terminateOwnedRuntime(run, supervisor, state.config);
   updateTeamConfig(state.stateDir, { status: 'stopped', stopped_at: new Date().toISOString() });
   return teamStatus(cwd, name, run);
 }
@@ -524,9 +500,11 @@ export function addWorker(cwd, name, role, assignment, options = {}) {
   return withStateLock(state.stateDir, 'team-membership', () => addWorkerLocked(cwd, name, role, assignment, options));
 }
 
-function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env, run = spawnSync } = {}) {
-  if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team add-worker requires running inside tmux.');
+function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env, run = spawnSync, spawnProcess = spawn } = {}) {
   const state = teamStatus(cwd, name, run);
+  const muxBackend = state.config.mux_backend || 'tmux';
+  if (muxBackend === 'tmux' && (!env.TMUX || !env.TMUX_PANE)) throw new Error('otx team add-worker requires running inside tmux for the tmux backend.');
+  const mux = createMuxAdapter({ backend: muxBackend, run, spawnProcess, leaderPaneId: env.TMUX_PANE });
   if (['stopped', 'cleaned', 'cleanup_pending'].includes(state.config.status)) {
     throw new Error(`cannot add a worker to team in status ${state.config.status}`);
   }
@@ -545,6 +523,7 @@ function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env
   let worker;
   let task;
   let paneId = null;
+  let panePid = null;
   let membershipAdded = false;
   try {
     worker = createWorkerWorktree({ repoRoot: state.config.cwd, teamName: name, worker: workerBase });
@@ -559,16 +538,10 @@ function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env
     const sessionId = randomUUID();
     writeFileSync(promptPath, buildWorkerPrompt({ teamName: name, worker, task: assignment }), 'utf8');
     const runner = join(dirname(fileURLToPath(import.meta.url)), 'worker-run.js');
-    const command = shellJoin([process.execPath, runner, state.stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, model || state.config.model || '']);
-    const split = run('tmux', ['split-window', '-v', '-d', '-P', '-F', '#{pane_id}', '-t', env.TMUX_PANE, '-c', worker.worktree_path, command], { cwd: state.config.cwd, encoding: 'utf8' });
-    if (split.status !== 0) throw new Error(String(split.stderr || 'failed to create worker pane').trim());
-    paneId = split.stdout.trim().split('\n')[0];
-    if (!paneId.startsWith('%')) throw new Error('tmux did not return a worker pane ID.');
-    runTmuxOrThrow(run, ['set-option', '-p', '-t', paneId, '@otx_team', name]);
-    runTmuxOrThrow(run, ['set-option', '-p', '-t', paneId, '@otx_worker', worker.name]);
-    runTmuxOrThrow(run, ['set-option', '-p', '-t', paneId, '@otx_run_id', state.config.run_id]);
-    run('tmux', ['select-pane', '-t', paneId, '-T', `${worker.name} [${worker.role}]`], { encoding: 'utf8' });
-    const panePid = readPanePid(run, paneId);
+    const workerArgs = [state.stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, model || state.config.model || ''];
+    const launched = mux.launchWorker({ cwd: worker.worktree_path, command: process.execPath, args: [runner, ...workerArgs], worker, config: state.config });
+    paneId = launched.id;
+    panePid = launched.pid;
     const updated = updateWorkerState(state.stateDir, worker.name, {
       initial_task_id: task.id,
       pane_id: paneId,
@@ -581,11 +554,11 @@ function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env
       phase: 'pane-started',
       resources: { workers: [{ ...worker, pane_id: paneId, pane_pid: updated.pane_pid, session_id: sessionId }] },
     });
-    run('tmux', ['select-layout', '-t', env.TMUX_PANE, 'main-vertical'], { encoding: 'utf8' });
+    mux.layout();
     finishTeamTransaction(transaction);
     return { worker: updated, task };
   } catch (error) {
-    if (paneId?.startsWith('%')) run('tmux', ['kill-pane', '-t', paneId], { encoding: 'utf8' });
+    if (paneId) mux.terminate({ name: worker?.name, pane_id: paneId, pane_pid: panePid });
     if (task) updateTaskState(state.stateDir, task.id, {
       status: 'failed', error: error.message, completed_at: new Date().toISOString(),
     });
@@ -617,9 +590,7 @@ export function recoverTeam(cwd, name, run = spawnSync) {
     for (const resource of resources) {
       const persisted = state?.workers.find((worker) => worker.name === resource.name);
       const worker = { ...resource, ...persisted };
-      if (state && inspectPaneOwnership(run, worker, state.config) === 'owned') {
-        run('tmux', ['kill-pane', '-t', worker.pane_id], { encoding: 'utf8' });
-      }
+      if (state) terminateOwnedRuntime(run, worker, state.config);
       if (persisted && !['completed', 'failed', 'cancelled'].includes(persisted.status)) {
         updateWorkerState(stateDir, worker.name, {
           status: 'failed', error: 'recovered incomplete runtime transaction', completed_at: new Date().toISOString(),
@@ -666,7 +637,7 @@ export function removeWorker(cwd, name, workerName, run = spawnSync) {
   if (!worktreeInspection.ok) throw new Error(`worker cleanup refused: ${worktreeInspection.reason}`);
   const paneInspection = inspectPaneOwnership(run, worker, state.config);
   if (paneInspection === 'mismatch') throw new Error(`worker pane ownership could not be verified: ${workerName}`);
-  if (paneInspection === 'owned') run('tmux', ['kill-pane', '-t', worker.pane_id], { encoding: 'utf8' });
+  if (paneInspection === 'owned') terminateOwnedRuntime(run, worker, state.config);
   const cleanup = cleanupWorkerWorktree(state.config.cwd, worker);
   if (cleanup.status !== 'removed') throw new Error(`worker cleanup refused: ${cleanup.reason}`);
   removeTeamWorker(state.stateDir, workerName);
@@ -674,9 +645,15 @@ export function removeWorker(cwd, name, workerName, run = spawnSync) {
 }
 
 export function resumeTeam(cwd, name, { model, env = process.env, run = spawnSync } = {}) {
-  if (!env.TMUX || !env.TMUX_PANE) throw new Error('otx team resume requires running inside tmux.');
   const state = readTeamState(cwd, name);
-  updateTeamConfig(state.stateDir, { leader_pane_id: env.TMUX_PANE, status: 'running', resumed_at: new Date().toISOString() });
+  if ((state.config.mux_backend || 'tmux') === 'tmux' && (!env.TMUX || !env.TMUX_PANE)) {
+    throw new Error('otx team resume requires running inside tmux for the tmux backend.');
+  }
+  updateTeamConfig(state.stateDir, {
+    leader_pane_id: state.config.mux_backend === 'headless' ? `process:${process.pid}` : env.TMUX_PANE,
+    status: 'running',
+    resumed_at: new Date().toISOString(),
+  });
   const args = ['resume', '--no-alt-screen', '-C', state.config.cwd];
   if (model) args.push('--model', model);
   args.push(state.config.leader_session_id, `Resume leadership of OTX team "${name}". Run team status, inspect worker results, integrate valid commits, verify the objective, then stop the team.`);
@@ -688,29 +665,7 @@ function paneOwnedBy(run, workerState, config) {
 }
 
 function inspectPaneOwnership(run, workerState, config) {
-  const paneId = workerState.pane_id;
-  if (!paneId?.startsWith('%')) return 'missing';
-  const result = run('tmux', ['display-message', '-p', '-t', paneId, '#{@otx_team}\t#{@otx_worker}\t#{@otx_run_id}\t#{pane_pid}\t#{pane_dead}'], { encoding: 'utf8' });
-  if (result.status !== 0) return 'missing';
-  const [team, worker, runId, panePid, dead] = result.stdout.trim().split('\t');
-  const owned = team === config.name && worker === workerState.name && runId === config.run_id
-    && Number(panePid) === workerState.pane_pid && dead === '0';
-  return owned ? 'owned' : 'mismatch';
-}
-
-function readPanePid(run, paneId) {
-  const result = run('tmux', ['display-message', '-p', '-t', paneId, '#{pane_pid}'], { encoding: 'utf8' });
-  const pid = Number(result.stdout?.trim());
-  if (result.status !== 0 || !Number.isInteger(pid)) throw new Error(`failed to read pane PID for ${paneId}`);
-  return pid;
-}
-
-function runTmuxOrThrow(run, args) {
-  const result = run('tmux', args, { encoding: 'utf8' });
-  if (result.error || result.status !== 0) {
-    const detail = result.error?.message || result.stderr || 'tmux failed';
-    throw new Error(String(detail).trim());
-  }
+  return inspectRuntimeOwnership(run, workerState, config);
 }
 
 function assignmentFor(role, count, task) {
@@ -731,8 +686,4 @@ function materializePlannedWorkers(plannedWorkers) {
     ...worker,
     depends_on: worker.depends_on_symbols.map((symbol) => taskIdBySymbol.get(symbol)),
   }));
-}
-
-function shellJoin(parts) {
-  return parts.map((value) => /^[a-zA-Z0-9_./:=+-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\"'\"'")}'`).join(' ');
 }

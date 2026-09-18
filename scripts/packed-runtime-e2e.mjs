@@ -12,12 +12,13 @@ const projectRoot = new URL('..', import.meta.url);
 const root = mkdtempSync(join(tmpdir(), 'otx-packed-runtime-'));
 const installRoot = join(root, 'install');
 const repo = join(root, 'repo');
+const headlessRepo = join(root, 'headless-repo');
 const binDir = join(root, 'bin');
 const cache = join(root, 'npm-cache');
 const session = `otx-e2e-${process.pid}`;
 
 try {
-  run('mkdir', ['-p', installRoot, repo, binDir]);
+  run('mkdir', ['-p', installRoot, repo, headlessRepo, binDir]);
   const pack = run('npm', ['pack', '--pack-destination', root], {
     cwd: projectRoot,
     env: { ...process.env, npm_config_cache: cache },
@@ -75,7 +76,24 @@ process.exit(0);
   run(otx, ['team', 'stop', 'e2e', '-C', repo, '--json'], { env });
   const cleanup = run(otx, ['team', 'cleanup', 'e2e', '-C', repo], { env });
   assert.match(cleanup.stdout, /"ok": true/, 'packed runtime cleanup did not complete');
-  process.stdout.write('packed runtime E2E passed: install, tmux startup, crash reschedule, stop, cleanup\n');
+
+  run('git', ['init', '-q'], { cwd: headlessRepo });
+  run('git', ['config', 'user.email', 'otx@example.com'], { cwd: headlessRepo });
+  run('git', ['config', 'user.name', 'OTX E2E'], { cwd: headlessRepo });
+  run('git', ['commit', '--allow-empty', '-qm', 'base'], { cwd: headlessRepo });
+  run(otx, ['team', '1:reviewer', '--headless', '--no-plan', '--name', 'headless', '-C', headlessRepo, 'headless runtime'], { env });
+  const headlessState = join(headlessRepo, '.git', 'otx', 'team', 'headless');
+  await waitFor(() => readWorker(headlessState, 'worker-1').status === 'completed', 'headless worker');
+  const headlessConfig = readJson(join(headlessState, 'config.json'));
+  assert.equal(headlessConfig.mux_backend, 'headless');
+  assert.match(readWorker(headlessState, 'worker-1').pane_id, /^process:/);
+  const workerPid = readWorker(headlessState, 'worker-1').pane_pid;
+  const supervisorPid = headlessConfig.supervisor_pane_pid;
+  run(otx, ['team', 'stop', 'headless', '-C', headlessRepo, '--json'], { env });
+  await waitFor(() => !processAlive(workerPid) && !processAlive(supervisorPid), 'headless shutdown');
+  const headlessCleanup = run(otx, ['team', 'cleanup', 'headless', '-C', headlessRepo], { env });
+  assert.match(headlessCleanup.stdout, /"ok": true/, 'headless cleanup did not complete');
+  process.stdout.write('packed runtime E2E passed: tmux crash recovery and headless lifecycle\n');
 } finally {
   spawnSync('tmux', ['kill-session', '-t', session], { stdio: 'ignore' });
   rmSync(root, { recursive: true, force: true });
@@ -109,6 +127,10 @@ function taskRecords(stateDir) {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function processAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
 function shellJoin(parts) {

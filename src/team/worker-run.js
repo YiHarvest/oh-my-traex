@@ -29,6 +29,8 @@ const heartbeat = setInterval(() => {
 }, 5000);
 const forwardSignal = (signal) => {
   if (!child.killed) child.kill(signal);
+  const forcedExit = setTimeout(() => process.exit(0), 250);
+  forcedExit.unref();
 };
 process.once('SIGTERM', () => forwardSignal('SIGTERM'));
 process.once('SIGINT', () => forwardSignal('SIGINT'));
