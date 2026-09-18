@@ -4,6 +4,7 @@ import { addWorker, assignTeamTask, awaitTeam, broadcastTeamMessage, cleanupTeam
 import { listTeamStates } from './state.js';
 import { runTeamSupervisor } from './supervisor.js';
 import { auditTeamRecords } from './doctor.js';
+import { parseRetentionDuration, pruneTeamState } from './retention.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 const TEAM_HELP = `oh-my-traex durable team runtime
@@ -14,6 +15,7 @@ Usage:
   otx team status|reconcile|recover|supervise|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose|doctor <name> [-C DIR]
   otx team events <name> [--after CURSOR] [--limit N] [-C DIR]
+  otx team prune <name> [--older-than 30d] [--keep-events N] [--dry-run] [-C DIR]
   otx team add-worker <name> <role> [-C DIR] -- "assignment"
   otx team remove-worker <name> <worker> [-C DIR]
   otx team assign <name> <worker> [--depends-on 1,2] [-C DIR] -- "task"
@@ -24,7 +26,7 @@ Usage:
 
 export function parseTeamArgs(args) {
   const tokens = [...args];
-  const subcommand = ['list', 'tasks', 'events', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'doctor', 'status', 'reconcile', 'recover', 'supervise', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
+  const subcommand = ['list', 'tasks', 'events', 'prune', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'doctor', 'status', 'reconcile', 'recover', 'supervise', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
   const options = { workers: 3, cwd: process.cwd(), timeoutMs: 3_600_000 };
   if (subcommand === 'list') {
     parseOptions(tokens, options);
@@ -182,6 +184,15 @@ export async function runTeamCommand(args) {
     process.stdout.write(`${JSON.stringify(readTeamEvents(cwd, parsed.name, { after: parsed.options.after, limit: parsed.options.limit }), null, 2)}\n`);
     return 0;
   }
+  if (parsed.subcommand === 'prune') {
+    const result = pruneTeamState(cwd, parsed.name, {
+      olderThanMs: parsed.options.olderThan ? parseRetentionDuration(parsed.options.olderThan) : undefined,
+      keepEvents: parsed.options.keepEvents,
+      dryRun: parsed.options.dryRun,
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return 0;
+  }
   if (parsed.subcommand === 'diagnose') {
     process.stdout.write(`${JSON.stringify(diagnoseTeam(cwd, parsed.name), null, 2)}\n`);
     return 0;
@@ -276,6 +287,11 @@ function parseOptions(tokens, options) {
     else if (token.startsWith('--interval-ms=')) options.intervalMs = Number(token.slice(14));
     else if (token === '--once') options.once = true;
     else if (token === '--repair') options.repair = true;
+    else if (token === '--older-than') options.olderThan = requireValue(tokens, ++index, token);
+    else if (token.startsWith('--older-than=')) options.olderThan = token.slice(13);
+    else if (token === '--keep-events') options.keepEvents = Number(requireValue(tokens, ++index, token));
+    else if (token.startsWith('--keep-events=')) options.keepEvents = Number(token.slice(14));
+    else if (token === '--dry-run') options.dryRun = true;
     else throw new Error(`Unknown team option: ${token}`);
   }
   if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1) throw new Error('--timeout-ms must be a positive integer.');
@@ -284,6 +300,9 @@ function parseOptions(tokens, options) {
   }
   if (options.intervalMs !== undefined && (!Number.isInteger(options.intervalMs) || options.intervalMs < 100)) {
     throw new Error('--interval-ms must be an integer of at least 100.');
+  }
+  if (options.keepEvents !== undefined && (!Number.isInteger(options.keepEvents) || options.keepEvents < 1)) {
+    throw new Error('--keep-events must be a positive integer.');
   }
 }
 
