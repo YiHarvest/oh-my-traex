@@ -179,6 +179,8 @@ Mailbox 投递使用一次性 receipt token，避免并发 worker 重复消费�
 
 ## 开发与验证
 
+Release workflow 使用 npm Trusted Publishing（OIDC），不依赖长期 `NPM_TOKEN`。首次发布前，需在 npm package settings 中把本仓库的 `.github/workflows/release.yml` 配置为 trusted publisher。
+
 ```bash
 npm test
 npm run test:coverage
@@ -189,7 +191,7 @@ npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"
 ```
 
-当前测试基线为 **54 passing**，并包含真实 tmux/TraeX Team、mailbox、DAG、动态成员、集成、清理和 Dashboard 响应式验证。
+当前测试基线为 **89 passing**，并包含 tmux Team、mailbox、DAG、动态成员、集成、清理和 Dashboard 响应式验证。
 
 ## 许可证
 

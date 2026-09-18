@@ -251,15 +251,11 @@ function serveStatic(pathname, response) {
     return;
   }
   if (relative === 'index.html') {
-    const snapshot = JSON.stringify(collectSnapshot()).replaceAll('<', '\u003c');
-    const html = readFileSync(filePath, 'utf8').replace(
-      '<!-- OTX_LIVE_BOOTSTRAP -->',
-      '<script>window.__OTX_LIVE_SNAPSHOT__=' + snapshot + ';</script>',
-    );
+    const html = readFileSync(filePath, 'utf8');
     response.writeHead(200, {
       'content-type': contentTypes['.html'],
       'cache-control': 'no-store',
-      'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+      'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
       'referrer-policy': 'no-referrer',
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'DENY',

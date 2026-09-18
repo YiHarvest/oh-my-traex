@@ -1,4 +1,5 @@
 import { actionAvailability, buildWorkerActionPayload, nextWrappedIndex, parseDependencyIds, summarizeRuntime } from './ui-model.js';
+import { createIcons } from './icons.js';
 
 const dashboardToken = new URLSearchParams(window.location.hash.slice(1)).get('token') || '';
 if (dashboardToken) history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -222,7 +223,7 @@ function renderTask() {
   renderActionState(task, focused);
   renderHud(task);
   renderGraph(task); renderAgents(task); renderInspector(task); renderTerminal(task); renderTaskList();
-  if (window.lucide) window.lucide.createIcons();
+  createIcons();
 }
 
 function renderHud(task) {
@@ -722,7 +723,6 @@ window.setInterval(function () {
 }, 1000);
 
 renderSettings();
-if (window.__OTX_LIVE_SNAPSHOT__) applyLiveSnapshot(window.__OTX_LIVE_SNAPSHOT__);
-else renderTask();
-if (window.lucide) window.lucide.createIcons();
+renderTask();
+createIcons();
 connectLiveStream();

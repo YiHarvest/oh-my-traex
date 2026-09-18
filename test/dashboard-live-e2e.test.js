@@ -30,7 +30,11 @@ test('live dashboard enforces token, origin, and browser security headers', asyn
     });
     assert.equal(forgedOrigin.status, 403);
     const page = await fetch(baseUrl);
-    assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+    const policy = page.headers.get('content-security-policy');
+    assert.match(policy, /frame-ancestors 'none'/);
+    assert.match(policy, /script-src 'self'/);
+    assert.doesNotMatch(policy, /unsafe-inline|unpkg/);
+    assert.doesNotMatch(await page.text(), /unpkg\.com|__OTX_LIVE_SNAPSHOT__/);
     assert.equal(page.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(page.headers.get('x-frame-options'), 'DENY');
   } finally {

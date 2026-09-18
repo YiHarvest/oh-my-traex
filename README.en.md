@@ -179,6 +179,8 @@ Mailbox delivery uses one-time receipt tokens so concurrent consumers cannot pro
 
 ## Development and verification
 
+The release workflow uses npm Trusted Publishing (OIDC) and does not depend on a long-lived `NPM_TOKEN`. Before publishing, configure this repository and `.github/workflows/release.yml` as a trusted publisher in the npm package settings.
+
 ```bash
 npm test
 npm run test:coverage
@@ -189,7 +191,7 @@ npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"
 ```
 
-The current baseline is **54 passing tests**, including real tmux/TraeX Team, mailbox, DAG, dynamic membership, integration, cleanup, and responsive Dashboard verification.
+The current baseline is **89 passing tests**, including tmux Team, mailbox, DAG, dynamic membership, integration, cleanup, and responsive Dashboard verification.
 
 ## License
 
