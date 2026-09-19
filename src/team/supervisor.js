@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask } from './state.js';
 import { reconcileTeam, recoverTeam } from './runtime.js';
+import { appendTeamEvent } from './events.js';
 
 export const DEFAULT_SUPERVISOR_INTERVAL_MS = 1000;
 
@@ -29,6 +30,18 @@ export function superviseTeamOnce(cwd, name, run = spawnSync) {
   }
 
   const state = reconcileTeam(cwd, name, run);
+  for (const taskId of reclaimedTasks) {
+    appendTeamEvent(before.stateDir, 'task.lease_reclaimed', { data: { task_id: taskId } });
+  }
+  for (const message of reclaimedMessages) {
+    appendTeamEvent(before.stateDir, 'message.lease_reclaimed', { data: message });
+  }
+  for (const transactionId of recovery.recovered) {
+    appendTeamEvent(before.stateDir, 'transaction.recovered', { data: { transaction_id: transactionId } });
+  }
+  for (const transactionId of recovery.recovered_deliveries) {
+    appendTeamEvent(before.stateDir, 'delivery.recovered', { data: { transaction_id: transactionId } });
+  }
   return {
     state,
     recovered_transactions: recovery.recovered,

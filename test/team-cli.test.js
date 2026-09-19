@@ -117,6 +117,13 @@ test('parses team doctor repair command', () => {
   assert.equal(parsed.options.cwd, '/repo');
 });
 
+test('parses team metrics command', () => {
+  const parsed = parseTeamArgs(['metrics', 'auth-team', '--json']);
+  assert.equal(parsed.subcommand, 'metrics');
+  assert.equal(parsed.name, 'auth-team');
+  assert.equal(parsed.options.json, true);
+});
+
 test('parses team cleanup command', () => {
   const parsed = parseTeamArgs(['cleanup', 'auth-team', '-C', '/repo']);
   assert.equal(parsed.name, 'auth-team');

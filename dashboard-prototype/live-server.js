@@ -14,6 +14,7 @@ import {
   teamStatus,
 } from '../src/team/runtime.js';
 import { listTeamStates } from '../src/team/state.js';
+import { collectTeamMetrics } from '../src/team/metrics.js';
 
 const root = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const cliPath = fileURLToPath(new URL('../src/cli.js', import.meta.url));
@@ -102,6 +103,9 @@ function collectSnapshot() {
       running: teams.filter((team) => team.config.status === 'running').length,
       workers: teams.reduce((count, team) => count + team.workers.length, 0),
       unhealthy: teams.reduce((count, team) => count + team.workers.filter((worker) => ['dead', 'stale', 'stalled', 'failed'].includes(worker.health)).length, 0),
+      task_queue_depth: teams.reduce((count, team) => count + team.metrics.task_queue_depth, 0),
+      message_queue_depth: teams.reduce((count, team) => count + team.metrics.message_queue_depth, 0),
+      reschedules: teams.reduce((count, team) => count + team.metrics.reschedules, 0),
     },
   };
 }
@@ -117,6 +121,7 @@ function collectTeam(name) {
     config: state.config,
     tasks: state.tasks,
     mailboxes,
+    metrics: collectTeamMetrics(repoRoot, name),
     workers: state.workers.map((worker) => ({
       ...worker,
       terminal_lines: readWorkerOutput(worker),

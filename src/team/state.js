@@ -6,6 +6,7 @@ import { readVersionedRecord } from './codec.js';
 
 export const TASK_LEASE_MS = 15 * 60_000;
 export const MAILBOX_LEASE_MS = 15 * 60_000;
+export const STATE_LOCK_TIMEOUT_MS = 30_000;
 
 export function sanitizeTeamName(value) {
   const name = value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30).replace(/-$/, '');
@@ -682,7 +683,7 @@ export function withStateLock(stateDir, recordName, callback) {
   const lockPath = join(stateDir, '.locks', `${recordName}.lock`);
   mkdirSync(dirname(lockPath), { recursive: true });
   const owner = { token: randomUUID(), pid: process.pid, acquired_at: new Date().toISOString() };
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS;
   while (true) {
     try {
       mkdirSync(lockPath);
