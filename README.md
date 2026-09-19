@@ -152,6 +152,7 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 | `otx team recover <name>` | 恢复启动或成员变更中断后遗留的 pane、worktree 和状态 |
 | `otx team supervise <name> [--once]` | 运行自愈控制循环，回收过期 lease、恢复事务并同步 Team 状态 |
 | `otx team events <name> [--after CURSOR] [--limit N]` | 增量读取按序持久化的 Team 事件 |
+| `otx team prune <name> [--older-than 30d] [--keep-events N]` | 将过期事件和终态事务归档，并保留最近事件 |
 | `otx team await <name>` | 等待所有 worker 进入终态 |
 | `otx team send <name> <worker> <message>` | 向原 worker session 投递 follow-up |
 | `otx team assign <name> <worker> [--depends-on IDs] <task>` | 创建并派发持久化任务 |

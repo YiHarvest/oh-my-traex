@@ -34,14 +34,17 @@ export function listTeamEvents(stateDir, { after = null, limit = 100 } = {}) {
   }
   const directory = eventsDir(stateDir);
   if (!existsSync(directory)) return { events: [], cursor: after };
-  const events = readdirSync(directory)
+  const names = readdirSync(directory)
     .filter((name) => /^\d{16}-.*\.json$/.test(name))
+    .filter((name) => !after || name.slice(0, 16) > after)
+    .sort()
+    .slice(0, limit);
+  const events = names
     .map((name) => {
       try { return readVersionedRecord(join(directory, name)); } catch { return null; }
     })
     .filter((event) => event && (!after || event.id > after))
-    .sort((left, right) => left.id.localeCompare(right.id))
-    .slice(0, limit);
+    .sort((left, right) => left.id.localeCompare(right.id));
   return { events, cursor: events.at(-1)?.id || after };
 }
 

@@ -53,6 +53,14 @@ test('parses incremental team event queries', () => {
   assert.equal(parsed.options.limit, 25);
 });
 
+test('parses team retention options', () => {
+  const parsed = parseTeamArgs(['prune', 'auth-team', '--older-than', '7d', '--keep-events', '50', '--dry-run']);
+  assert.equal(parsed.subcommand, 'prune');
+  assert.equal(parsed.options.olderThan, '7d');
+  assert.equal(parsed.options.keepEvents, 50);
+  assert.equal(parsed.options.dryRun, true);
+});
+
 test('parses team resume model override', () => {
   const parsed = parseTeamArgs(['resume', 'auth-team', '--model', 'GPT-5.6-Sol']);
   assert.equal(parsed.subcommand, 'resume');
