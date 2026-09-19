@@ -1,7 +1,8 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { readVersionedRecord } from './codec.js';
 
 export const TASK_LEASE_MS = 15 * 60_000;
 export const MAILBOX_LEASE_MS = 15 * 60_000;
@@ -665,7 +666,7 @@ export function writeJsonAtomic(path, value) {
 }
 
 function readJson(path) {
-  return JSON.parse(readFileSync(path, 'utf8'));
+  return readVersionedRecord(path);
 }
 
 function withTaskLock(stateDir, taskId, callback) {

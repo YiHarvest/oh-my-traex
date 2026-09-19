@@ -158,6 +158,7 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 | `otx team add-worker <name> <role> <assignment>` | 动态增加独立 worker |
 | `otx team remove-worker <name> <worker>` | 安全移除空闲且可回收的 worker |
 | `otx team diagnose <name>` | 查看 pane、PID、heartbeat、activity 和阻塞信息 |
+| `otx team doctor <name> [--repair]` | 校验/迁移状态 schema，并隔离损坏的辅助记录 |
 | `otx team integrate <name> [workers...]` | 验证并 cherry-pick worker commit range |
 | `otx team stop <name>` | 验证 pane ownership 后停止 Team |
 | `otx team cleanup <name>` | 清理已停止且安全的 branch/worktree |
