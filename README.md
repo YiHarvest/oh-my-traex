@@ -150,6 +150,7 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 | `otx team status <name>` | 查看 worker、pane、worktree、commit 和结果 |
 | `otx team reconcile <name>` | 将失联 worker 和 Team 终态显式同步到持久化状态 |
 | `otx team recover <name>` | 恢复启动或成员变更中断后遗留的 pane、worktree 和状态 |
+| `otx team supervise <name> [--once]` | 运行自愈控制循环，回收过期 lease、恢复事务并同步 Team 状态 |
 | `otx team events <name> [--after CURSOR] [--limit N]` | 增量读取按序持久化的 Team 事件 |
 | `otx team await <name>` | 等待所有 worker 进入终态 |
 | `otx team send <name> <worker> <message>` | 向原 worker session 投递 follow-up |
