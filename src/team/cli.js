@@ -11,7 +11,7 @@ const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 const TEAM_HELP = `oh-my-traex durable team runtime
 
 Usage:
-  otx team [N:role] [--name NAME] [--model MODEL] [--no-plan] [--planner-timeout-ms N] [-C DIR] "task"
+  otx team [N:role] [--name NAME] [--model MODEL] [--headless] [--no-plan] [--planner-timeout-ms N] [-C DIR] "task"
   otx team list [-C DIR] [--json]
   otx team status|reconcile|recover|supervise|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose|doctor|metrics <name> [-C DIR]
@@ -127,6 +127,7 @@ export function parseTeamArgs(args) {
     else if (token === '--model' || token === '-m') options.model = requireValue(tokens, ++index, token);
     else if (token === '--cwd' || token === '-C') options.cwd = requireValue(tokens, ++index, token);
     else if (token === '--dry-run') options.dryRun = true;
+    else if (token === '--headless') options.muxBackend = 'headless';
     else if (token === '--no-plan') options.autoPlan = false;
     else if (token === '--planner-timeout-ms') options.plannerTimeoutMs = Number(requireValue(tokens, ++index, token));
     else if (token.startsWith('--planner-timeout-ms=')) options.plannerTimeoutMs = Number(token.slice(21));
@@ -259,6 +260,7 @@ export async function runTeamCommand(args) {
     baseRole: parsed.options.role,
     autoPlan: parsed.options.autoPlan !== false,
     plannerTimeoutMs: parsed.options.plannerTimeoutMs,
+    muxBackend: parsed.options.muxBackend || 'tmux',
   });
   process.stdout.write(`otx team started: ${runtime.name}\nstate: ${runtime.stateDir}\n`);
   if (runtime.config.planning_mode === 'fallback') {

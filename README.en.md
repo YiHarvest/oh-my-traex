@@ -146,6 +146,7 @@ Example state tree:
 | `otx run --ui dashboard <task>` | Start the TraeX app-server/session viewer combination |
 | `otx prompt <task>` | Print the leader orchestration prompt |
 | `otx team [N:role] <task>` | Start durable independent Team workers |
+| `otx team [N:role] --headless <task>` | Start a Team with the process backend for CI and containers |
 | `otx team list` | List Teams in the current repository |
 | `otx team status <name>` | Inspect worker, pane, worktree, commit, and result state |
 | `otx team reconcile <name>` | Explicitly persist dead-worker and terminal Team reconciliation |

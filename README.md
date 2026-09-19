@@ -146,6 +146,7 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 | `otx run --ui dashboard <task>` | 启动 TraeX app-server/session viewer 组合 |
 | `otx prompt <task>` | 输出 leader orchestration prompt |
 | `otx team [N:role] <task>` | 启动独立持久化 Team workers |
+| `otx team [N:role] --headless <task>` | 使用无 UI 的进程 backend 启动 Team，适用于 CI/容器 |
 | `otx team list` | 列出当前仓库的 Team |
 | `otx team status <name>` | 查看 worker、pane、worktree、commit 和结果 |
 | `otx team reconcile <name>` | 将失联 worker 和 Team 终态显式同步到持久化状态 |
