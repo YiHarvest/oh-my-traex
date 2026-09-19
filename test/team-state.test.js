@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { acknowledgeMailboxMessage, addTeamWorker, claimTeamTask, completeClaimedTask, completeMailboxDelivery, createTeamTask, enqueueMailboxMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredTask, removeTeamWorker, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState } from '../src/team/state.js';
+import { acknowledgeMailboxMessage, addTeamWorker, claimTaskMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, createTeamTask, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask, recoverDeliveryTransactions, removeTeamWorker, renewMailboxDelivery, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState, writeJsonAtomic } from '../src/team/state.js';
 
 test('persists team and worker state under the Git common directory', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-state-'));
@@ -67,6 +67,72 @@ test('allows one delivery receipt winner across 64 concurrent consumers', async 
     assert.equal(completeMailboxDelivery(stateDir, 'worker-1', message.id, 'wrong', { status: 'completed' }).error, 'receipt_mismatch');
     assert.equal(completeMailboxDelivery(stateDir, 'worker-1', message.id, winner.token, { status: 'completed' }).ok, true);
     assert.equal(readMailbox(stateDir, 'worker-1').messages[0].delivery_attempts, 1);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('renews, fences, and reclaims mailbox delivery leases', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-mailbox-lease-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'task', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const message = enqueueMailboxMessage(stateDir, 'worker-1', 'retry me');
+    const first = acknowledgeMailboxMessage(stateDir, 'worker-1', message.id);
+    assert.ok(Date.parse(first.message.receipt.leased_until) > Date.now());
+    assert.equal(renewMailboxDelivery(stateDir, 'worker-1', message.id, first.token).ok, true);
+    updateMailboxMessage(stateDir, 'worker-1', message.id, {
+      receipt: { ...first.message.receipt, leased_until: new Date(0).toISOString() },
+    });
+    const reclaimed = reclaimExpiredMailboxDelivery(stateDir, 'worker-1', message.id);
+    assert.equal(reclaimed.reclaimed, true);
+    assert.equal(reclaimed.message.status, 'pending');
+    const second = acknowledgeMailboxMessage(stateDir, 'worker-1', message.id);
+    assert.equal(completeMailboxDelivery(stateDir, 'worker-1', message.id, first.token, { status: 'completed' }).error, 'receipt_mismatch');
+    assert.equal(completeMailboxDelivery(stateDir, 'worker-1', message.id, second.token, { status: 'completed' }).ok, true);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('atomically claims one task message across 64 concurrent consumers', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-task-message-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const message = enqueueTaskMessage(stateDir, 'worker-1', '1', 'claim together');
+    const fixture = new URL('./fixtures/claim-message.js', import.meta.url);
+    const results = await Promise.all(Array.from({ length: 64 }, () =>
+      runJsonProcess(fixture, [stateDir, 'worker-1', message.id])));
+    assert.equal(results.filter((result) => result.ok).length, 1);
+    assert.equal(readTeamState(cwd, 'demo').tasks[0].status, 'in_progress');
+    assert.equal(readMailbox(stateDir, 'worker-1').messages[0].status, 'working');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('replays an interrupted task-message delivery transaction idempotently', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-delivery-recovery-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const message = enqueueTaskMessage(stateDir, 'worker-1', '1', 'recover together');
+    const task = readTeamState(cwd, 'demo').tasks[0];
+    const now = new Date().toISOString();
+    const claimedTask = { ...task, status: 'in_progress', claim: { owner: 'worker-1', token: 'task-token', leased_until: new Date(Date.now() + 60_000).toISOString() } };
+    const claimedMessage = { ...message, status: 'working', receipt: { worker: 'worker-1', token: 'receipt-token', acknowledged_at: now, leased_until: new Date(Date.now() + 60_000).toISOString() } };
+    writeJsonAtomic(join(stateDir, 'delivery-transactions', 'interrupted.json'), {
+      schema_version: 1, id: 'interrupted', status: 'active', worker: 'worker-1',
+      task_id: '1', message_id: message.id, task: claimedTask, message: claimedMessage, created_at: now,
+    });
+    assert.deepEqual(recoverDeliveryTransactions(stateDir), ['interrupted']);
+    assert.equal(readTeamState(cwd, 'demo').tasks[0].claim.token, 'task-token');
+    assert.equal(readMailbox(stateDir, 'worker-1').messages[0].receipt.token, 'receipt-token');
+    assert.deepEqual(recoverDeliveryTransactions(stateDir), []);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

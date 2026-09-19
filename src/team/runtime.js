@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { buildLeaderPrompt, buildWorkerPrompt } from './prompt.js';
 import { planTeam } from './planner.js';
-import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reassignTeamTask, removeTeamWorker, sanitizeTeamName, teamStateDir, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState, withStateLock } from './state.js';
+import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reassignTeamTask, recoverDeliveryTransactions, removeTeamWorker, sanitizeTeamName, teamStateDir, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState, withStateLock } from './state.js';
 import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktree, createWorkerWorktrees, inspectWorkerWorktree, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
 import { beginTeamTransaction, finishTeamTransaction, listTeamTransactions, updateTeamTransaction } from './transaction.js';
 import { appendTeamEvent, listTeamEvents } from './events.js';
@@ -142,6 +142,7 @@ export function reconcileTeam(cwd, name, run = spawnSync) {
 }
 
 function inspectTeam(cwd, name, run, persist) {
+  if (persist) recoverDeliveryTransactions(teamStateDir(cwd, name));
   const state = readTeamState(cwd, name);
   state.workers = state.workers.map((worker) => {
     const paneAlive = paneOwnedBy(run, worker, state.config);
@@ -570,8 +571,9 @@ function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env
 
 export function recoverTeam(cwd, name, run = spawnSync) {
   const stateDir = teamStateDir(cwd, name);
+  const deliveries = recoverDeliveryTransactions(stateDir);
   const transactions = listTeamTransactions(stateDir, { activeOnly: true });
-  if (transactions.length === 0) return { ok: true, recovered: [], cleanup_debt: [] };
+  if (transactions.length === 0) return { ok: true, recovered: [], recovered_deliveries: deliveries, cleanup_debt: [] };
   let state = null;
   try { state = readTeamState(cwd, name); } catch {}
   const repoRoot = state?.config.cwd || cwd;
@@ -614,7 +616,7 @@ export function recoverTeam(cwd, name, run = spawnSync) {
     recovered_at: new Date().toISOString(),
     cleanup_debt: cleanupDebt,
   });
-  return { ok: cleanupDebt.length === 0, recovered, cleanup_debt: cleanupDebt };
+  return { ok: cleanupDebt.length === 0, recovered, recovered_deliveries: deliveries, cleanup_debt: cleanupDebt };
 }
 
 function dedupeWorkers(workers) {
