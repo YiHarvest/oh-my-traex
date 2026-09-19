@@ -186,6 +186,7 @@ Release workflow 使用 npm Trusted Publishing（OIDC），不依赖长期 `NPM_
 npm test
 npm run test:coverage
 npm run test:stress
+npm run test:e2e:packed
 npm run pack:check
 npm run doctor
 npm pack --dry-run

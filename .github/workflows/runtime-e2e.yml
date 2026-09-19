@@ -1,0 +1,21 @@
+name: Packed Runtime E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  packed-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: npm run test:e2e:packed
