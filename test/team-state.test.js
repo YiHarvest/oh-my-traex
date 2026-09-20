@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { acknowledgeMailboxMessage, addTeamWorker, claimTaskMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, completeWorkerTurn, createTeamTask, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask, recoverDeliveryTransactions, removeTeamWorker, renewMailboxDelivery, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState, withStateLock, writeJsonAtomic } from '../src/team/state.js';
 
@@ -471,7 +472,7 @@ function runClaimProcess(scriptUrl, stateDir, taskId, workerName) {
 
 function runJsonProcess(scriptUrl, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptUrl.pathname, ...args], {
+    const child = spawn(process.execPath, [fileURLToPath(scriptUrl), ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -488,7 +489,7 @@ function runJsonProcess(scriptUrl, args) {
 
 function runLockProcess(scriptUrl, stateDir, recordName, readyPath, releasePath, publishReadyPath, publishReleasePath) {
   return new Promise((resolve, reject) => {
-    const args = [scriptUrl.pathname, stateDir, recordName, readyPath, releasePath];
+    const args = [fileURLToPath(scriptUrl), stateDir, recordName, readyPath, releasePath];
     if (publishReadyPath && publishReleasePath) args.push(publishReadyPath, publishReleasePath);
     const child = spawn(process.execPath, args, {
       stdio: ['ignore', 'ignore', 'pipe'],

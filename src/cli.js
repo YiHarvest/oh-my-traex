@@ -9,7 +9,7 @@ import { buildOrchestratorPrompt } from './prompt.js';
 import { roleCatalog } from './roles.js';
 import { scheduleDashboardPrompt, startDashboardRuntime, startDashboardUi, stopDashboardRuntime } from './dashboard.js';
 import { runTeamCommand } from './team/cli.js';
-import { detectTraeCapabilities } from './team/trae.js';
+import { detectTraeCapabilities, permissionArgs, TRAE_PLANNER_SANDBOX, TRAE_WORKER_SANDBOX } from './team/trae.js';
 
 const HELP = `oh-my-traex (otx) - TraeX-native multi-agent orchestration
 
@@ -71,8 +71,7 @@ export async function main(argv = process.argv.slice(2)) {
       '--skip-git-repo-check',
       '-C',
       cwd,
-      '--sandbox',
-      options.readOnly ? 'read-only' : 'workspace-write',
+      ...permissionArgs(options.readOnly ? TRAE_PLANNER_SANDBOX : TRAE_WORKER_SANDBOX),
     ];
     if (options.model) traeArgs.push('--model', options.model);
     if (options.json) traeArgs.push('--json');

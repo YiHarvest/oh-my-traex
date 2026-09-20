@@ -11,6 +11,7 @@ test('dry-run renders a safe TraeX exec command without starting a session', () 
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /traex exec --skip-git-repo-check/);
+  assert.match(result.stdout, /--permission-mode default/);
   assert.match(result.stdout, /--sandbox read-only/);
   assert.match(result.stdout, /Maximum simultaneously active child agents: 2/);
   assert.match(result.stdout, /audit the API/);

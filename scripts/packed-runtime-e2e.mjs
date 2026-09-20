@@ -34,7 +34,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
-  process.stdout.write('Commands: resume app-server\\n--json --sandbox --session-id --output-last-message --config --remote-auth-token-env\\n');
+  process.stdout.write('Commands: resume app-server\\n--json --sandbox --permission-mode --session-id --output-last-message --config --remote-auth-token-env\\n');
   process.exit(0);
 }
 if (args[0] === 'exec') {

@@ -24,6 +24,23 @@ test('headless ownership rejects a reused pid with a different birth identity', 
   }), 'mismatch');
 });
 
+test('reads process birth identity through each supported platform adapter', () => {
+  assert.equal(processIdentity(42, undefined, 'linux', () => '42 (worker name) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 9876'),
+    'linux-start-ticks:9876');
+  const windowsRun = (command, args) => {
+    assert.equal(command, 'powershell.exe');
+    assert.match(args.at(-1), /Get-Process -Id 42/);
+    return { status: 0, stdout: '638000000000000000\r\n' };
+  };
+  assert.equal(processIdentity(42, windowsRun, 'win32'), 'windows-start-ticks:638000000000000000');
+  const posixRun = (command, args) => {
+    assert.equal(command, 'ps');
+    assert.deepEqual(args, ['-o', 'lstart=', '-p', '42']);
+    return { status: 0, stdout: 'Sat Sep 20 10:00:00 2026\n' };
+  };
+  assert.equal(processIdentity(42, posixRun, 'darwin'), 'posix-lstart:Sat Sep 20 10:00:00 2026');
+});
+
 test('rejects unknown mux backends', () => {
   assert.throws(() => createMuxAdapter({ backend: 'unknown' }), /unsupported mux backend/);
 });

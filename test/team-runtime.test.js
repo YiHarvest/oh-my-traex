@@ -126,8 +126,10 @@ test('resume publishes running only after TraeX actually spawns', async () => {
     const worker = { name: 'worker-1', index: 1, status: 'completed', role: 'reviewer', assignment: 'task', requires_commit: false, worktree_path: cwd };
     initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: 'process:1', leaderSessionId: 'leader', muxBackend: 'headless', workers: [worker] });
     let child;
+    let spawnedArgs;
     const resumed = resumeTeam(cwd, 'demo', {
-      spawnProcess: () => {
+      spawnProcess: (_command, args) => {
+        spawnedArgs = args;
         child = new EventEmitter();
         process.nextTick(() => { child.emit('spawn'); child.emit('close', 0); });
         return child;
@@ -135,6 +137,10 @@ test('resume publishes running only after TraeX actually spawns', async () => {
     });
     assert.equal(readTeamState(cwd, 'demo').config.status, 'resuming');
     assert.equal((await resumed).status, 0);
+    assert.deepEqual(spawnedArgs.slice(0, 7), [
+      'resume', '--no-alt-screen', '-C', cwd, '--permission-mode', 'default', '--sandbox',
+    ]);
+    assert.equal(spawnedArgs[7], 'workspace-write');
     const config = readTeamState(cwd, 'demo').config;
     assert.equal(config.status, 'running');
     assert.ok(config.resumed_at);

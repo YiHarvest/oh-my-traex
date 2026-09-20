@@ -172,7 +172,7 @@ Mailbox delivery uses one-time receipt tokens so concurrent consumers cannot pro
 
 ## Safety boundaries
 
-- The default TraeX sandbox is `workspace-write`; bypass-permissions is never enabled automatically.
+- Workers and the leader explicitly use TraeX `permission-mode=default` with `workspace-write`; the planner uses `permission-mode=default` with `read-only`; follow-up resumes also retain `permission-mode=default` instead of inheriting bypass permissions.
 - The Dashboard is loopback-only and exposes no arbitrary shell endpoint.
 - Worktree trust is injected only into the worker process and does not update the user's global trust list.
 - Pane termination validates team, worker, run ID, and original pane PID.
@@ -194,7 +194,7 @@ npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"
 ```
 
-The current baseline is **89 passing tests**, including tmux Team, mailbox, DAG, dynamic membership, integration, cleanup, and responsive Dashboard verification.
+CI runs unit tests on Linux, macOS, and Windows with Node.js 22, plus Linux with Node.js 24. Linux also runs coverage, 64-process stress tests, package verification, and the packed runtime E2E.
 
 ## License
 

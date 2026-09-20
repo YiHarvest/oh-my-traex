@@ -6,6 +6,7 @@ import { runTeamSupervisor } from './supervisor.js';
 import { auditTeamRecords } from './doctor.js';
 import { parseRetentionDuration, pruneTeamState } from './retention.js';
 import { collectTeamMetrics } from './metrics.js';
+import { permissionArgs, TRAE_WORKER_SANDBOX } from './trae.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 const TEAM_HELP = `oh-my-traex durable team runtime
@@ -270,7 +271,7 @@ export async function runTeamCommand(args) {
   }
   const leaderArgs = [
     '--no-alt-screen', '--session-id', runtime.config.leader_session_id,
-    '-C', runtime.config.cwd, '--sandbox', 'workspace-write', runtime.leaderPrompt,
+    '-C', runtime.config.cwd, ...permissionArgs(TRAE_WORKER_SANDBOX), runtime.leaderPrompt,
   ];
   if (parsed.options.model) leaderArgs.unshift('--model', parsed.options.model);
   const result = spawnSync('traex', leaderArgs, { cwd: runtime.config.cwd, stdio: 'inherit' });

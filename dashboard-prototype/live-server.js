@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve } from 'node:path';
+import { extname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import {
@@ -250,7 +250,8 @@ function serveStatic(pathname, response) {
   let relative = pathname === '/' ? 'index.html' : normalize(pathname);
   while (relative.startsWith('/') || relative.startsWith('\\')) relative = relative.slice(1);
   const filePath = resolve(root, relative);
-  if (!(filePath === root || filePath.startsWith(root + '/')) || !existsSync(filePath) || !statSync(filePath).isFile()) {
+  const fromRoot = relativePath(root, filePath);
+  if (fromRoot.startsWith('..') || isAbsolute(fromRoot) || !existsSync(filePath) || !statSync(filePath).isFile()) {
     response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     response.end('Not found');
     return;
@@ -273,6 +274,10 @@ function serveStatic(pathname, response) {
     'cache-control': 'no-store',
   });
   createReadStream(filePath).pipe(response);
+}
+
+function relativePath(from, to) {
+  return relative(from, to);
 }
 
 function readJsonBody(request) {
