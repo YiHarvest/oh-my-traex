@@ -680,22 +680,37 @@ function withOrderedRecordLocks(stateDir, names, callback, index = 0) {
   return withStateLock(stateDir, names[index], () => withOrderedRecordLocks(stateDir, names, callback, index + 1));
 }
 
-export function withStateLock(stateDir, recordName, callback) {
+export function withStateLock(stateDir, recordName, callback, { beforePublish } = {}) {
   const lockPath = join(stateDir, '.locks', `${recordName}.lock`);
   mkdirSync(dirname(lockPath), { recursive: true });
+  removeAbandonedLockCandidates(lockPath);
   const owner = { token: randomUUID(), pid: process.pid, acquired_at: new Date().toISOString() };
+  const candidatePath = `${lockPath}.candidate.${process.pid}.${owner.token}`;
   const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS;
-  while (true) {
-    try {
-      mkdirSync(lockPath);
-      writeJsonAtomic(join(lockPath, 'owner.json'), owner);
-      break;
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
-      recoverAbandonedLock(lockPath);
-      if (Date.now() >= deadline) throw new Error(`record lock timeout: ${recordName}`);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  mkdirSync(candidatePath);
+  try {
+    writeJsonAtomic(join(candidatePath, 'owner.json'), owner);
+    beforePublish?.(candidatePath);
+    while (true) {
+      if (existsSync(lockPath)) {
+        recoverAbandonedLock(lockPath);
+        if (Date.now() >= deadline) throw new Error(`record lock timeout: ${recordName}`);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+        continue;
+      }
+      try {
+        renameSync(candidatePath, lockPath);
+        syncDirectory(dirname(lockPath));
+        break;
+      } catch (error) {
+        if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(error?.code)) throw error;
+        recoverAbandonedLock(lockPath);
+        if (Date.now() >= deadline) throw new Error(`record lock timeout: ${recordName}`);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }
     }
+  } finally {
+    if (existsSync(candidatePath)) rmSync(candidatePath, { recursive: true, force: true });
   }
   try {
     return callback();
@@ -705,6 +720,23 @@ export function withStateLock(stateDir, recordName, callback) {
 }
 
 const withRecordLock = withStateLock;
+
+function removeAbandonedLockCandidates(lockPath) {
+  const directory = dirname(lockPath);
+  const prefix = `${lockPath.slice(directory.length + 1)}.candidate.`;
+  for (const name of readdirSync(directory).filter((entry) => entry.startsWith(prefix))) {
+    const candidatePath = join(directory, name);
+    let owner;
+    try {
+      owner = readJson(join(candidatePath, 'owner.json'));
+    } catch {
+      const candidatePid = Number(name.slice(prefix.length).split('.')[0]);
+      if (!processIsLive(candidatePid)) rmSync(candidatePath, { recursive: true, force: true });
+      continue;
+    }
+    if (!processIsLive(owner.pid)) rmSync(candidatePath, { recursive: true, force: true });
+  }
+}
 
 function recoverAbandonedLock(lockPath) {
   let owner;

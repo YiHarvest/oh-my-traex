@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { acknowledgeMailboxMessage, addTeamWorker, claimTaskMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, createTeamTask, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask, recoverDeliveryTransactions, removeTeamWorker, renewMailboxDelivery, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState, writeJsonAtomic } from '../src/team/state.js';
+import { acknowledgeMailboxMessage, addTeamWorker, claimTaskMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, createTeamTask, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask, recoverDeliveryTransactions, removeTeamWorker, renewMailboxDelivery, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState, withStateLock, writeJsonAtomic } from '../src/team/state.js';
 
 test('persists team and worker state under the Git common directory', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-state-'));
@@ -282,6 +282,60 @@ test('an old lock owner cannot delete a replacement lock', async () => {
   }
 });
 
+test('a prepared lock candidate cannot overwrite an already published owner', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-lock-publish-'));
+  try {
+    const stateDir = join(cwd, 'state');
+    const fixture = new URL('./fixtures/hold-state-lock.js', import.meta.url);
+    const firstReady = join(cwd, 'first-ready');
+    const firstRelease = join(cwd, 'first-release');
+    const firstPublishReady = join(cwd, 'first-publish-ready');
+    const firstPublishRelease = join(cwd, 'first-publish-release');
+    const secondReady = join(cwd, 'second-ready');
+    const secondRelease = join(cwd, 'second-release');
+    const first = runLockProcess(
+      fixture, stateDir, 'shared', firstReady, firstRelease, firstPublishReady, firstPublishRelease,
+    );
+    await waitForFile(firstPublishReady);
+
+    const second = runLockProcess(fixture, stateDir, 'shared', secondReady, secondRelease);
+    await waitForFile(secondReady);
+    writeFileSync(firstPublishRelease, 'publish');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(existsSync(firstReady), false);
+
+    writeFileSync(secondRelease, 'release');
+    await second;
+    await waitForFile(firstReady);
+    writeFileSync(firstRelease, 'release');
+    await first;
+    assert.equal(existsSync(join(stateDir, '.locks', 'shared.lock')), false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('a later lock acquisition removes candidates left by dead processes', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-lock-candidate-cleanup-'));
+  try {
+    const stateDir = join(cwd, 'state');
+    const candidate = join(stateDir, '.locks', 'shared.lock.candidate.99999999.abandoned');
+    const incompleteCandidate = join(stateDir, '.locks', 'shared.lock.candidate.99999998.incomplete');
+    mkdirSync(candidate, { recursive: true });
+    mkdirSync(incompleteCandidate);
+    writeJsonAtomic(join(candidate, 'owner.json'), {
+      schema_version: 1, token: 'abandoned', pid: 99999999, acquired_at: new Date(0).toISOString(),
+    });
+    let entered = false;
+    withStateLock(stateDir, 'shared', () => { entered = true; });
+    assert.equal(entered, true);
+    assert.equal(existsSync(candidate), false);
+    assert.equal(existsSync(incompleteCandidate), false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 function runClaimProcess(scriptUrl, stateDir, taskId, workerName) {
   return runJsonProcess(scriptUrl, [stateDir, taskId, workerName]);
 }
@@ -303,9 +357,11 @@ function runJsonProcess(scriptUrl, args) {
   });
 }
 
-function runLockProcess(scriptUrl, stateDir, recordName, readyPath, releasePath) {
+function runLockProcess(scriptUrl, stateDir, recordName, readyPath, releasePath, publishReadyPath, publishReleasePath) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptUrl.pathname, stateDir, recordName, readyPath, releasePath], {
+    const args = [scriptUrl.pathname, stateDir, recordName, readyPath, releasePath];
+    if (publishReadyPath && publishReleasePath) args.push(publishReadyPath, publishReleasePath);
+    const child = spawn(process.execPath, args, {
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';
