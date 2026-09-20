@@ -1,13 +1,14 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
-export function createMuxAdapter({ backend = 'tmux', run = spawnSync, spawnProcess = spawn, leaderPaneId } = {}) {
+export function createMuxAdapter({ backend = 'tmux', run = spawnSync, spawnProcess = spawn, leaderPaneId, readProcessIdentity = processIdentity } = {}) {
   if (backend === 'tmux') return new TmuxAdapter(run, leaderPaneId);
-  if (backend === 'headless') return new HeadlessAdapter(spawnProcess);
+  if (backend === 'headless') return new HeadlessAdapter(spawnProcess, readProcessIdentity);
   throw new Error(`unsupported mux backend: ${backend}`);
 }
 
-export function inspectRuntimeOwnership(run, owner, config) {
-  return createMuxAdapter({ backend: config.mux_backend || 'tmux', run }).inspect(owner, config);
+export function inspectRuntimeOwnership(run, owner, config, options = {}) {
+  return createMuxAdapter({ backend: config.mux_backend || 'tmux', run, ...options }).inspect(owner, config);
 }
 
 export function terminateOwnedRuntime(run, owner, config) {
@@ -95,9 +96,10 @@ class TmuxAdapter {
 }
 
 class HeadlessAdapter {
-  constructor(spawnProcess) {
+  constructor(spawnProcess, readProcessIdentity) {
     this.backend = 'headless';
     this.spawnProcess = spawnProcess;
+    this.readProcessIdentity = readProcessIdentity;
   }
 
   prepareLeader() {}
@@ -114,7 +116,14 @@ class HeadlessAdapter {
     const pid = Number(String(owner.pane_id || '').replace('process:', ''));
     if (!Number.isInteger(pid) || pid !== owner.pane_pid) return 'missing';
     if (owner.pid && owner.pid !== pid) return 'mismatch';
-    try { process.kill(pid, 0); return 'owned'; } catch { return 'missing'; }
+    if (!owner.process_identity) return 'mismatch';
+    try {
+      process.kill(pid, 0);
+      const identity = this.readProcessIdentity(pid);
+      return identity && identity === owner.process_identity ? 'owned' : 'mismatch';
+    } catch {
+      return 'missing';
+    }
   }
 
   terminate(owner) {
@@ -126,9 +135,47 @@ class HeadlessAdapter {
   #launch(cwd, command, args) {
     const child = this.spawnProcess(command, args, { cwd, detached: true, stdio: 'ignore' });
     if (!child.pid) throw new Error('failed to start headless runtime process');
+    const identity = waitForProcessIdentity(child.pid, this.readProcessIdentity);
+    if (!identity) {
+      try { child.kill('SIGTERM'); } catch {}
+      throw new Error('failed to establish headless runtime process identity');
+    }
     child.unref();
-    return { id: `process:${child.pid}`, pid: child.pid };
+    return { id: `process:${child.pid}`, pid: child.pid, processIdentity: identity };
   }
+}
+
+export function processIdentity(pid, run = spawnSync) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/);
+      return fields[19] ? `linux-start-ticks:${fields[19]}` : null;
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === 'win32') {
+    const result = run('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
+    ], { encoding: 'utf8' });
+    const started = result.status === 0 ? result.stdout.trim() : '';
+    return /^\d+$/.test(started) ? `windows-start-ticks:${started}` : null;
+  }
+  const result = run('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' });
+  const started = result.status === 0 ? result.stdout.trim() : '';
+  return started ? `posix-lstart:${started}` : null;
+}
+
+function waitForProcessIdentity(pid, readIdentity) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const identity = readIdentity(pid);
+    if (identity) return identity;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  }
+  return null;
 }
 
 function shellJoin(parts) {

@@ -238,7 +238,7 @@ export async function runTeamCommand(args) {
     return 0;
   }
   if (parsed.subcommand === 'resume') {
-    const result = resumeTeam(cwd, parsed.name, { model: parsed.options.model });
+    const result = await resumeTeam(cwd, parsed.name, { model: parsed.options.model });
     if (result.error) throw result.error;
     return result.status ?? 1;
   }
