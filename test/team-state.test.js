@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { acknowledgeMailboxMessage, addTeamWorker, claimTaskMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, createTeamTask, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask, recoverDeliveryTransactions, removeTeamWorker, renewMailboxDelivery, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState, withStateLock, writeJsonAtomic } from '../src/team/state.js';
+import { acknowledgeMailboxMessage, addTeamWorker, claimTaskMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, completeWorkerTurn, createTeamTask, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask, recoverDeliveryTransactions, removeTeamWorker, renewMailboxDelivery, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState, withStateLock, writeJsonAtomic } from '../src/team/state.js';
 
 test('persists team and worker state under the Git common directory', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-state-'));
@@ -132,6 +132,103 @@ test('replays an interrupted task-message delivery transaction idempotently', ()
     assert.deepEqual(recoverDeliveryTransactions(stateDir), ['interrupted']);
     assert.equal(readTeamState(cwd, 'demo').tasks[0].claim.token, 'task-token');
     assert.equal(readMailbox(stateDir, 'worker-1').messages[0].receipt.token, 'receipt-token');
+    assert.deepEqual(recoverDeliveryTransactions(stateDir), []);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('commits task, mailbox, and worker completion from one fenced transaction', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-completion-transaction-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const message = enqueueTaskMessage(stateDir, 'worker-1', '1', 'complete together');
+    const claimed = claimTaskMessage(stateDir, 'worker-1', message.id);
+    const completed = completeWorkerTurn(stateDir, {
+      workerName: 'worker-1', messageId: message.id, taskId: '1', taskToken: claimed.token,
+      receiptToken: claimed.receiptToken, taskUpdates: { status: 'completed', result_path: 'result.md' },
+      messageUpdates: { status: 'completed', result_path: 'result.md' },
+      workerUpdates: { status: 'completed', current_task_id: null, current_message_id: null },
+    });
+    assert.equal(completed.ok, true);
+    assert.equal(readTeamState(cwd, 'demo').tasks[0].status, 'completed');
+    assert.equal(readMailbox(stateDir, 'worker-1').messages[0].status, 'completed');
+    assert.equal(readTeamState(cwd, 'demo').workers[0].status, 'completed');
+    const transactions = readdirSync(join(stateDir, 'delivery-transactions'))
+      .map((name) => JSON.parse(readFileSync(join(stateDir, 'delivery-transactions', name), 'utf8')));
+    assert.equal(transactions.filter((transaction) => transaction.operation === 'complete').length, 1);
+    assert.equal(transactions.find((transaction) => transaction.operation === 'complete').status, 'committed');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('commits an initial task and worker completion without a mailbox record', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-initial-completion-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const claimed = claimTeamTask(stateDir, '1', 'worker-1');
+    const completed = completeWorkerTurn(stateDir, {
+      workerName: 'worker-1', taskId: '1', taskToken: claimed.token,
+      taskUpdates: { status: 'completed', result_path: 'result.md' },
+      workerUpdates: { status: 'completed', result_path: 'result.md' },
+    });
+    assert.equal(completed.ok, true);
+    assert.equal(completed.message, null);
+    assert.equal(readTeamState(cwd, 'demo').tasks[0].status, 'completed');
+    assert.equal(readTeamState(cwd, 'demo').workers[0].status, 'completed');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('rejects a stale completion receipt without changing task, mailbox, or worker', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-completion-fence-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'starting', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const message = enqueueTaskMessage(stateDir, 'worker-1', '1', 'fenced completion');
+    const claimed = claimTaskMessage(stateDir, 'worker-1', message.id);
+    const rejected = completeWorkerTurn(stateDir, {
+      workerName: 'worker-1', messageId: message.id, taskId: '1', taskToken: claimed.token,
+      receiptToken: 'stale-receipt', taskUpdates: { status: 'completed' },
+      messageUpdates: { status: 'completed' }, workerUpdates: { status: 'completed' },
+    });
+    assert.equal(rejected.error, 'receipt_mismatch');
+    assert.equal(readTeamState(cwd, 'demo').tasks[0].status, 'in_progress');
+    assert.equal(readMailbox(stateDir, 'worker-1').messages[0].status, 'working');
+    assert.equal(readTeamState(cwd, 'demo').workers[0].status, 'starting');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('rolls an interrupted completion transaction forward idempotently', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-completion-recovery-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'working', role: 'explorer', assignment: 'initial', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    const message = enqueueTaskMessage(stateDir, 'worker-1', '1', 'recover completion');
+    const now = new Date().toISOString();
+    const completedTask = { ...readTeamState(cwd, 'demo').tasks[0], status: 'completed', claim: null, completed_at: now };
+    const completedMessage = { ...message, status: 'completed', completed_at: now };
+    const completedWorker = { ...readTeamState(cwd, 'demo').workers[0], status: 'completed', completed_at: now };
+    writeJsonAtomic(join(stateDir, 'tasks', 'task-1.json'), completedTask);
+    writeJsonAtomic(join(stateDir, 'delivery-transactions', 'completion-interrupted.json'), {
+      schema_version: 1, id: 'completion-interrupted', operation: 'complete', status: 'active',
+      worker: 'worker-1', task_id: '1', message_id: message.id, task: completedTask,
+      message: completedMessage, worker_state: completedWorker, created_at: now,
+    });
+    assert.deepEqual(recoverDeliveryTransactions(stateDir), ['completion-interrupted']);
+    assert.equal(readTeamState(cwd, 'demo').tasks[0].status, 'completed');
+    assert.equal(readMailbox(stateDir, 'worker-1').messages[0].status, 'completed');
+    assert.equal(readTeamState(cwd, 'demo').workers[0].status, 'completed');
     assert.deepEqual(recoverDeliveryTransactions(stateDir), []);
   } finally {
     rmSync(cwd, { recursive: true, force: true });

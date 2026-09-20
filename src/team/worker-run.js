@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { acknowledgeMailboxMessage, claimTaskMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, readMailbox, renewMailboxDelivery, renewTaskClaim, updateMailboxMessage, updateWorkerState } from './state.js';
+import { acknowledgeMailboxMessage, claimTaskMessage, claimTeamTask, completeWorkerTurn, readMailbox, renewMailboxDelivery, renewTaskClaim, updateMailboxMessage, updateWorkerState } from './state.js';
 import { buildWorkerExecArgs, buildWorkerResumeArgs, detectTraeCapabilities } from './trae.js';
 import { appendTeamEvent } from './events.js';
 
@@ -58,33 +58,38 @@ if (currentState.status === 'cancelled') {
   process.exitCode = 0;
   process.exit();
 }
-const initialCompletion = completeClaimedTask(stateDir, initialTaskId, workerName, initialClaim.token, {
-  status: finalStatus,
-  completed_at: new Date().toISOString(),
-  commit: commitSha,
-  result_path: resultPath,
+const initialCompletedAt = new Date().toISOString();
+const initialError = finalStatus === 'failed'
+  ? exitCode !== 0
+    ? `traex exited ${exitCode}`
+    : !commitSatisfied
+      ? 'worker produced no commit'
+      : !clean
+        ? 'worker worktree is dirty after completion'
+        : 'worker produced no result'
+  : null;
+const initialCompletion = completeWorkerTurn(stateDir, {
+  workerName, taskId: initialTaskId, taskToken: initialClaim.token,
+  taskUpdates: {
+    status: finalStatus, completed_at: initialCompletedAt, commit: commitSha, result_path: resultPath, error: initialError,
+  },
+  workerUpdates: {
+    status: finalStatus, exit_code: exitCode, completed_at: initialCompletedAt, commit: commitSha, error: initialError,
+  },
 });
 const persistedInitialStatus = initialCompletion.ok ? finalStatus : 'failed';
 appendTeamEvent(stateDir, `task.${persistedInitialStatus}`, {
   actor: workerName,
   data: { task_id: initialTaskId, commit: commitSha, error: initialCompletion.ok ? null : initialCompletion.error },
 });
-updateWorkerState(stateDir, workerName, {
+if (!initialCompletion.ok) updateWorkerState(stateDir, workerName, {
   status: persistedInitialStatus,
   exit_code: exitCode,
   completed_at: new Date().toISOString(),
   commit: commitSha,
   error: !initialCompletion.ok
     ? initialCompletion.error
-    : finalStatus === 'failed'
-    ? exitCode !== 0
-      ? `traex exited ${exitCode}`
-      : !commitSatisfied
-        ? 'worker produced no commit'
-        : !clean
-          ? 'worker worktree is dirty after completion'
-          : 'worker produced no result'
-      : null,
+    : initialError,
 });
 activeClaim = null;
 process.stdout.write(`\n[otx] ${workerName} ${persistedInitialStatus}; waiting for leader shutdown.\n`);
@@ -150,47 +155,48 @@ while (true) {
         : !followupHasResult ? 'follow-up produced no result'
           : 'follow-up worktree is dirty'
     : null;
-  let persistedFollowupStatus = followupStatus;
-  let persistedFollowupError = followupError;
-  if (message.task_id) {
-    const completion = completeClaimedTask(stateDir, message.task_id, workerName, taskClaim.token, {
+  const completedAt = new Date().toISOString();
+  const completion = completeWorkerTurn(stateDir, {
+    workerName, messageId: message.id, taskId: message.task_id,
+    taskToken: taskClaim?.token, receiptToken,
+    taskUpdates: {
+      status: followupStatus, completed_at: completedAt, commit: followupCommitSha,
+      result_path: followupPath, error: followupError,
+    },
+    messageUpdates: {
+      status: followupStatus, completed_at: completedAt, result_path: followupPath,
+      commit: followupCommitSha, error: followupError,
+    },
+    workerUpdates: {
       status: followupStatus,
-      completed_at: new Date().toISOString(),
+      current_message_id: null,
+      current_task_id: null,
+      blocked_task_ids: [],
       commit: followupCommitSha,
-      result_path: followupPath,
+      integration: followupCommitSha !== followupBaseCommit ? null : followupStartState.integration,
+      completed_at: completedAt,
       error: followupError,
-    });
-    if (!completion.ok) {
-      persistedFollowupStatus = 'failed';
-      persistedFollowupError = completion.error;
-    }
-    appendTeamEvent(stateDir, `task.${persistedFollowupStatus}`, {
-      actor: workerName,
-      data: { task_id: message.task_id, message_id: message.id, commit: followupCommitSha, error: persistedFollowupError },
-    });
-  }
-  completeMailboxDelivery(stateDir, workerName, message.id, receiptToken, {
-    status: persistedFollowupStatus,
-    completed_at: new Date().toISOString(),
-    result_path: followupPath,
-    commit: followupCommitSha,
-    error: persistedFollowupError,
+    },
   });
-  appendTeamEvent(stateDir, `message.${persistedFollowupStatus}`, {
-    actor: workerName, data: { message_id: message.id, task_id: message.task_id, commit: followupCommitSha },
-  });
-  activeClaim = null;
-  activeDelivery = null;
-  updateWorkerState(stateDir, workerName, {
-    status: persistedFollowupStatus,
+  const persistedFollowupStatus = completion.ok ? followupStatus : 'failed';
+  const persistedFollowupError = completion.ok ? followupError : completion.error;
+  if (!completion.ok) updateWorkerState(stateDir, workerName, {
+    status: 'failed',
     current_message_id: null,
     current_task_id: null,
     blocked_task_ids: [],
-    commit: followupCommitSha,
-    integration: followupCommitSha !== followupBaseCommit ? null : followupStartState.integration,
-    completed_at: new Date().toISOString(),
+    completed_at: completedAt,
     error: persistedFollowupError,
   });
+  if (message.task_id) appendTeamEvent(stateDir, completion.ok ? `task.${followupStatus}` : 'task.completion_rejected', {
+    actor: workerName,
+    data: { task_id: message.task_id, message_id: message.id, commit: followupCommitSha, error: persistedFollowupError },
+  });
+  appendTeamEvent(stateDir, completion.ok ? `message.${followupStatus}` : 'message.completion_rejected', {
+    actor: workerName, data: { message_id: message.id, task_id: message.task_id, commit: followupCommitSha, error: persistedFollowupError },
+  });
+  activeClaim = null;
+  activeDelivery = null;
 }
 
 function selectPendingMessage() {
