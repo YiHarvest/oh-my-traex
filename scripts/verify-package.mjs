@@ -20,7 +20,7 @@ for (const required of ['src/cli.js', 'src/team/runtime.js', 'dashboard-prototyp
 for (const excludedPrefix of ['test/', 'assets/', 'docs/', '.github/']) {
   assert.equal(paths.some((path) => path.startsWith(excludedPrefix)), false, `package contains ${excludedPrefix}`);
 }
-assert.ok(manifest.unpackedSize < 305_000, `unpacked package is too large: ${manifest.unpackedSize} bytes`);
+assert.ok(manifest.unpackedSize < 310_000, `unpacked package is too large: ${manifest.unpackedSize} bytes`);
 const installRoot = mkdtempSync(join(tmpdir(), 'oh-my-traex-pack-check-'));
 try {
   const pack = spawnSync('npm', ['pack', '--pack-destination', installRoot], {

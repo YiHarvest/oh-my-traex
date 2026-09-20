@@ -809,7 +809,7 @@ export function withStateLock(stateDir, recordName, callback, { beforePublish } 
       }
     }
   } finally {
-    if (existsSync(candidatePath)) rmSync(candidatePath, { recursive: true, force: true });
+    if (existsSync(candidatePath)) removeTree(candidatePath);
   }
   try {
     return callback();
@@ -830,10 +830,10 @@ function removeAbandonedLockCandidates(lockPath) {
       owner = readJson(join(candidatePath, 'owner.json'));
     } catch {
       const candidatePid = Number(name.slice(prefix.length).split('.')[0]);
-      if (!processIsLive(candidatePid)) rmSync(candidatePath, { recursive: true, force: true });
+      if (!processIsLive(candidatePid)) removeTree(candidatePath);
       continue;
     }
-    if (!processIsLive(owner.pid)) rmSync(candidatePath, { recursive: true, force: true });
+    if (!processIsLive(owner.pid)) removeTree(candidatePath);
   }
 }
 
@@ -864,11 +864,11 @@ function quarantineLock(lockPath, expectedToken) {
       try { renameSync(quarantine, lockPath); } catch {}
       return false;
     }
-    rmSync(quarantine, { recursive: true, force: true });
+    removeTree(quarantine);
     return true;
   } catch {
     if (expectedToken === 'unowned') {
-      rmSync(quarantine, { recursive: true, force: true });
+      removeTree(quarantine);
       return true;
     }
     try { renameSync(quarantine, lockPath); } catch {}
@@ -884,9 +884,9 @@ function releaseOwnedLock(lockPath, token) {
   }
   const releasePath = `${lockPath}.release.${process.pid}.${token}`;
   try {
-    renameSync(lockPath, releasePath);
+    renameWithRetry(lockPath, releasePath);
     if (readJson(join(releasePath, 'owner.json')).token === token) {
-      rmSync(releasePath, { recursive: true, force: true });
+      removeTree(releasePath);
     } else {
       try { renameSync(releasePath, lockPath); } catch {}
     }
@@ -901,6 +901,23 @@ function processIsLive(pid) {
   } catch (error) {
     return error?.code !== 'ESRCH';
   }
+}
+
+function renameWithRetry(source, target, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      renameSync(source, target);
+      return;
+    } catch (error) {
+      if (!['EACCES', 'EPERM', 'ENOTEMPTY'].includes(error?.code) || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
+
+function removeTree(path) {
+  rmSync(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
 }
 
 function syncDescriptor(descriptor) {

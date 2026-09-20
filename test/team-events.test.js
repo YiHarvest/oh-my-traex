@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { appendTeamEvent, listTeamEvents } from '../src/team/events.js';
 
@@ -18,7 +19,7 @@ test('reads incremental event pages with a stable cursor', () => {
     assert.deepEqual(second.events.map((event) => event.type), ['task.completed']);
     assert.equal(listTeamEvents(stateDir, { after: second.cursor }).events.length, 0);
   } finally {
-    rmSync(stateDir, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
   }
 });
 
@@ -38,7 +39,7 @@ test('persists a gap-free ordered stream across 64 concurrent event writers', as
 
 function runJsonProcess(scriptUrl, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptUrl.pathname, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [fileURLToPath(scriptUrl), ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });

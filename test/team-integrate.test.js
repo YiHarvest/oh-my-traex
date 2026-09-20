@@ -14,6 +14,7 @@ test('integrates the complete validated worker commit range', () => {
   git(repoRoot, ['init', '-q', '-b', 'main']);
   git(repoRoot, ['config', 'user.name', 'OTX Test']);
   git(repoRoot, ['config', 'user.email', 'otx@example.com']);
+  git(repoRoot, ['config', 'core.autocrlf', 'false']);
   writeFileSync(join(repoRoot, 'README.md'), '# fixture\n');
   git(repoRoot, ['add', 'README.md']);
   git(repoRoot, ['commit', '-q', '-m', 'init']);
@@ -66,6 +67,7 @@ test('invalidates integration evidence after leader history is reset and preserv
   git(repoRoot, ['init', '-q', '-b', 'main']);
   git(repoRoot, ['config', 'user.name', 'OTX Test']);
   git(repoRoot, ['config', 'user.email', 'otx@example.com']);
+  git(repoRoot, ['config', 'core.autocrlf', 'false']);
   writeFileSync(join(repoRoot, 'README.md'), '# fixture\n');
   git(repoRoot, ['add', 'README.md']);
   git(repoRoot, ['commit', '-q', '-m', 'init']);

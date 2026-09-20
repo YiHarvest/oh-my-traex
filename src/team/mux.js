@@ -145,18 +145,18 @@ class HeadlessAdapter {
   }
 }
 
-export function processIdentity(pid, run = spawnSync) {
+export function processIdentity(pid, run = spawnSync, platform = process.platform, readFile = readFileSync) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (process.platform === 'linux') {
+  if (platform === 'linux') {
     try {
-      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const stat = readFile(`/proc/${pid}/stat`, 'utf8');
       const fields = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/);
       return fields[19] ? `linux-start-ticks:${fields[19]}` : null;
     } catch {
       return null;
     }
   }
-  if (process.platform === 'win32') {
+  if (platform === 'win32') {
     const result = run('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-Command',
       `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,

@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { permissionArgs, TRAE_PLANNER_SANDBOX } from './trae.js';
 
 const ALLOWED_ROLES = new Set(['executor', 'test-engineer', 'reviewer', 'explorer', 'architect']);
 const WRITE_ROLES = new Set(['executor', 'test-engineer']);
@@ -12,7 +13,7 @@ export async function planTeam({ cwd, task, workerCount, model, timeoutMs = 90_0
   const outputPath = join(temporary, 'plan.json');
   writeFileSync(schemaPath, JSON.stringify(buildPlanSchema(workerCount), null, 2));
   const args = [
-    'exec', '--skip-git-repo-check', '-C', cwd, '--sandbox', 'read-only',
+    'exec', '--skip-git-repo-check', '-C', cwd, ...permissionArgs(TRAE_PLANNER_SANDBOX),
     '--output-schema', schemaPath, '--output-last-message', outputPath,
   ];
   if (model) args.push('--model', model);

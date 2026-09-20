@@ -11,6 +11,7 @@ import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktree, crea
 import { beginTeamTransaction, finishTeamTransaction, listTeamTransactions, updateTeamTransaction } from './transaction.js';
 import { appendTeamEvent, listTeamEvents } from './events.js';
 import { createMuxAdapter, inspectRuntimeOwnership, terminateOwnedRuntime } from './mux.js';
+import { permissionArgs, TRAE_WORKER_SANDBOX } from './trae.js';
 
 export async function startTeam({ cwd, task, workerCount, model, teamName, baseRole, autoPlan = true, plannerTimeoutMs, muxBackend = 'tmux', env = process.env, run = spawnSync, spawnProcess = spawn }) {
   if (muxBackend === 'tmux' && (!env.TMUX || !env.TMUX_PANE)) throw new Error('otx team requires running inside tmux unless --headless is used.');
@@ -711,7 +712,10 @@ export function resumeTeam(cwd, name, { model, env = process.env, spawnProcess =
   const requestedAt = new Date().toISOString();
   updateTeamConfig(state.stateDir, { status: 'resuming', resume_requested_at: requestedAt, resume_error: null },
     { allowTerminalReset: true, reason: 'leader explicitly resumed the team' });
-  const args = ['resume', '--no-alt-screen', '-C', state.config.cwd];
+  const args = [
+    'resume', '--no-alt-screen', '-C', state.config.cwd,
+    ...permissionArgs(TRAE_WORKER_SANDBOX),
+  ];
   if (model) args.push('--model', model);
   args.push(state.config.leader_session_id, `Resume leadership of OTX team "${name}". Run team status, inspect worker results, integrate valid commits, verify the objective, then stop the team.`);
   return new Promise((resolve) => {
