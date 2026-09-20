@@ -147,34 +147,49 @@ function inspectTeam(cwd, name, run, persist) {
   if (persist) recoverDeliveryTransactions(teamStateDir(cwd, name));
   const state = readTeamState(cwd, name);
   state.workers = state.workers.map((worker) => {
-    const paneAlive = paneOwnedBy(run, worker, state.config);
-    const heartbeatAgeMs = worker.heartbeat_at ? Math.max(0, Date.now() - Date.parse(worker.heartbeat_at)) : null;
-    const activityAt = worker.last_activity_at || worker.child_started_at || worker.started_at;
+    let currentWorker = worker;
+    const evidence = verifyIntegrationEvidence(state.config.cwd, worker, run);
+    const claimedIntegration = ['integrated', 'already_integrated'].includes(worker.integration?.status);
+    if (claimedIntegration && !evidence.current) {
+      const staleIntegration = {
+        ...worker.integration,
+        previous_status: worker.integration.status,
+        status: 'stale',
+        stale_reason: evidence.reason,
+        stale_at: persist ? new Date().toISOString() : worker.integration.stale_at,
+      };
+      currentWorker = persist
+        ? updateWorkerState(state.stateDir, worker.name, { integration: staleIntegration })
+        : { ...worker, integration: staleIntegration };
+    }
+    const paneAlive = paneOwnedBy(run, currentWorker, state.config);
+    const heartbeatAgeMs = currentWorker.heartbeat_at ? Math.max(0, Date.now() - Date.parse(currentWorker.heartbeat_at)) : null;
+    const activityAt = currentWorker.last_activity_at || currentWorker.child_started_at || currentWorker.started_at;
     const activityAgeMs = activityAt ? Math.max(0, Date.now() - Date.parse(activityAt)) : null;
-    const health = worker.status === 'completed'
+    const health = currentWorker.status === 'completed'
       ? 'completed'
-      : worker.status === 'failed' || worker.status === 'cancelled'
-        ? worker.status
+      : currentWorker.status === 'failed' || currentWorker.status === 'cancelled'
+        ? currentWorker.status
         : !paneAlive
           ? 'dead'
           : heartbeatAgeMs !== null && heartbeatAgeMs > 30_000
             ? 'stale'
-            : worker.status === 'working' && activityAgeMs !== null && activityAgeMs > 60_000
+            : currentWorker.status === 'working' && activityAgeMs !== null && activityAgeMs > 60_000
               ? 'stalled'
             : 'healthy';
-    const startupGrace = worker.status === 'starting'
-      && Date.now() - Date.parse(worker.updated_at || state.config.created_at) < 10_000;
-    if (!paneAlive && !startupGrace && ['starting', 'queued', 'working'].includes(worker.status)) {
+    const startupGrace = currentWorker.status === 'starting'
+      && Date.now() - Date.parse(currentWorker.updated_at || state.config.created_at) < 10_000;
+    if (!paneAlive && !startupGrace && ['starting', 'queued', 'working'].includes(currentWorker.status)) {
       const failure = {
         status: 'failed',
         error: 'worker pane exited before recording a terminal result',
         completed_at: new Date().toISOString(),
         pane_alive: false,
-        dirty: worktreeStatus(worker.worktree_path) !== '',
+        dirty: worktreeStatus(currentWorker.worktree_path) !== '',
       };
-      const failed = persist ? updateWorkerState(state.stateDir, worker.name, failure) : { ...worker, ...failure };
+      const failed = persist ? updateWorkerState(state.stateDir, currentWorker.name, failure) : { ...currentWorker, ...failure };
       if (persist) {
-        updateTaskState(state.stateDir, worker.initial_task_id || String(worker.index), {
+        updateTaskState(state.stateDir, currentWorker.initial_task_id || String(currentWorker.index), {
           status: 'failed',
           error: failed.error,
           completed_at: failed.completed_at,
@@ -183,9 +198,9 @@ function inspectTeam(cwd, name, run, persist) {
       return { ...failed, health: 'dead', heartbeat_age_ms: heartbeatAgeMs };
     }
     return {
-      ...worker,
+      ...currentWorker,
       pane_alive: paneAlive,
-      dirty: worktreeStatus(worker.worktree_path) !== '',
+      dirty: worktreeStatus(currentWorker.worktree_path) !== '',
       health,
       heartbeat_age_ms: heartbeatAgeMs,
       activity_age_ms: activityAgeMs,
@@ -209,7 +224,38 @@ function inspectTeam(cwd, name, run, persist) {
       ? updateTeamConfig(state.stateDir, terminalConfig)
       : { ...state.config, ...terminalConfig };
   }
+  if (state.config.status === 'integrated'
+    && state.workers.some((worker) => worker.integration?.status === 'stale')) {
+    const staleConfig = { status: 'ready', integrated_at: null, integration_results: null };
+    state.config = persist
+      ? updateTeamConfig(state.stateDir, staleConfig, { allowTerminalReset: true, reason: 'integration evidence became stale' })
+      : { ...state.config, ...staleConfig };
+  }
   return state;
+}
+
+export function verifyIntegrationEvidence(repoRoot, worker, run = spawnSync) {
+  const integration = worker.integration;
+  if (!integration || !['integrated', 'already_integrated'].includes(integration.status)) {
+    return { current: false, reason: 'integration_status_not_current' };
+  }
+  if (!worker.commit || integration.commit !== worker.commit) {
+    return { current: false, reason: 'worker_commit_changed' };
+  }
+  const evidenceCommit = integration.integrated_commit
+    || (integration.status === 'already_integrated' ? integration.commit : null);
+  if (!evidenceCommit) return { current: false, reason: 'integration_commit_missing' };
+  const reachable = run('git', ['merge-base', '--is-ancestor', evidenceCommit, 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
+  if (reachable.status === 0) return { current: true, evidence_commit: evidenceCommit, method: 'ancestor' };
+  if (worker.base_commit && integration.source_commits?.length > 0) {
+    const cherry = run('git', ['cherry', 'HEAD', worker.commit, worker.base_commit], { cwd: repoRoot, encoding: 'utf8' });
+    const patches = cherry.status === 0 ? cherry.stdout.trim().split('\n').filter(Boolean) : [];
+    if (patches.length === integration.source_commits.length
+      && patches.every((line) => line.startsWith('- '))) {
+      return { current: true, evidence_commit: evidenceCommit, method: 'patch_equivalent' };
+    }
+  }
+  return { current: false, reason: 'integration_commit_not_reachable', evidence_commit: evidenceCommit };
 }
 
 export async function awaitTeam(cwd, name, timeoutMs = 3_600_000) {
@@ -276,8 +322,9 @@ export function sendTeamMessage(cwd, name, workerName, message) {
   const created = enqueueMailboxMessage(state.stateDir, workerName, message);
   updateWorkerState(state.stateDir, workerName, {
     status: worker.status === 'working' ? 'working' : 'queued',
-  });
-  updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
+  }, { allowTerminalReset: true, reason: 'leader queued a follow-up message' });
+  updateTeamConfig(state.stateDir, { status: 'running', completed_at: null },
+    { allowTerminalReset: true, reason: 'leader queued a follow-up message' });
   appendTeamEvent(state.stateDir, 'message.queued', { actor: 'leader', data: { worker: workerName, message_id: created.id } });
   return created;
 }
@@ -290,11 +337,12 @@ export function broadcastTeamMessage(cwd, name, message) {
     const created = enqueueMailboxMessage(state.stateDir, worker.name, message);
     updateWorkerState(state.stateDir, worker.name, {
       status: worker.status === 'working' ? 'working' : 'queued',
-    });
+    }, { allowTerminalReset: true, reason: 'leader queued a broadcast message' });
     appendTeamEvent(state.stateDir, 'message.queued', { actor: 'leader', data: { worker: worker.name, message_id: created.id } });
     return { worker: worker.name, message: created };
   });
-  updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
+  updateTeamConfig(state.stateDir, { status: 'running', completed_at: null },
+    { allowTerminalReset: true, reason: 'leader queued a broadcast message' });
   return messages;
 }
 
@@ -356,8 +404,9 @@ export function assignTeamTask(cwd, name, workerName, description, dependsOn = [
   const message = enqueueTaskMessage(state.stateDir, workerName, task.id, body);
   updateWorkerState(state.stateDir, workerName, {
     status: worker.status === 'working' ? 'working' : 'queued',
-  });
-  updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
+  }, { allowTerminalReset: true, reason: 'leader assigned a new task' });
+  updateTeamConfig(state.stateDir, { status: 'running', completed_at: null },
+    { allowTerminalReset: true, reason: 'leader assigned a new task' });
   appendTeamEvent(state.stateDir, 'task.queued', {
     actor: 'leader', data: { task_id: task.id, worker: workerName, message_id: message.id },
   });
@@ -385,13 +434,14 @@ function rescheduleFailedTasks(state, run) {
       const message = enqueueTaskMessage(state.stateDir, target.name, task.id, body);
       updateWorkerState(state.stateDir, target.name, {
         status: target.status === 'working' ? 'working' : 'queued',
-      });
+      }, { allowTerminalReset: true, reason: 'scheduler rescheduled a failed task' });
       appendTeamEvent(state.stateDir, 'task.rescheduled', {
         data: { task_id: task.id, from: failedOwner.name, to: target.name, message_id: message.id },
       });
       results.push({ task_id: task.id, from: failedOwner.name, to: target.name, message_id: message.id });
     }
-    if (results.length > 0) updateTeamConfig(state.stateDir, { status: 'running', completed_at: null });
+    if (results.length > 0) updateTeamConfig(state.stateDir, { status: 'running', completed_at: null },
+      { allowTerminalReset: true, reason: 'scheduler rescheduled a failed task' });
     return results;
   });
 }
@@ -412,8 +462,7 @@ export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
   });
   const results = [];
   for (const worker of selected) {
-    if (['integrated', 'already_integrated'].includes(worker.integration?.status)
-      && worker.integration?.commit === worker.commit) {
+    if (verifyIntegrationEvidence(state.config.cwd, worker, run).current) {
       results.push({ ...worker.integration, status: 'already_integrated' });
       continue;
     }
@@ -424,14 +473,20 @@ export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
     if (branchHead.status !== 0 || branchHead.stdout.trim() !== worker.commit) {
       throw new Error(`worker branch head does not match recorded commit: ${worker.name}`);
     }
-    const integrationBase = worker.integration?.commit || worker.base_commit;
+    const integrationBase = worker.base_commit;
     const range = run('git', ['rev-list', '--reverse', `${integrationBase}..${worker.commit}`], { cwd: state.config.cwd, encoding: 'utf8' });
     if (range.status !== 0) throw new Error(`worker commit range is invalid: ${worker.name}`);
     const sourceCommits = range.stdout.trim().split('\n').filter(Boolean);
     if (sourceCommits.length === 0) throw new Error(`worker has no commits beyond its base: ${worker.name}`);
     const alreadyIntegrated = run('git', ['merge-base', '--is-ancestor', worker.commit, 'HEAD'], { cwd: state.config.cwd, encoding: 'utf8' });
     if (alreadyIntegrated.status === 0) {
-      const record = { worker: worker.name, commit: worker.commit, source_commits: sourceCommits, status: 'already_integrated' };
+      const record = {
+        worker: worker.name,
+        commit: worker.commit,
+        source_commits: sourceCommits,
+        integrated_commit: worker.commit,
+        status: 'already_integrated',
+      };
       updateWorkerState(state.stateDir, worker.name, { integration: record });
       results.push(record);
       continue;
@@ -465,8 +520,8 @@ export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
   return { ok: true, results };
 }
 
-export function cleanupTeam(cwd, name) {
-  const state = teamStatus(cwd, name);
+export function cleanupTeam(cwd, name, run = spawnSync) {
+  const state = teamStatus(cwd, name, run);
   if (state.config.status !== 'stopped') throw new Error('team must be stopped before cleanup.');
   const results = [];
   for (const worker of state.workers) {
@@ -479,7 +534,7 @@ export function cleanupTeam(cwd, name) {
       continue;
     }
     const producedCommit = Boolean(worker.commit && worker.commit !== worker.base_commit);
-    const integrated = ['integrated', 'already_integrated'].includes(worker.integration?.status)
+    const integrated = verifyIntegrationEvidence(state.config.cwd, worker, run).current
       || !producedCommit;
     if (!integrated) {
       results.push({ worker: worker.name, status: 'preserved', reason: 'commit_not_integrated', commit: worker.commit });
@@ -635,7 +690,7 @@ export function removeWorker(cwd, name, workerName, run = spawnSync) {
   if (!worker) throw new Error(`worker not found: ${workerName}`);
   if (['starting', 'queued', 'working'].includes(worker.status)) throw new Error(`worker is busy: ${workerName}`);
   const producedCommit = Boolean(worker.commit && worker.commit !== worker.base_commit);
-  const integrated = ['integrated', 'already_integrated'].includes(worker.integration?.status) || !producedCommit;
+  const integrated = verifyIntegrationEvidence(state.config.cwd, worker, run).current || !producedCommit;
   if (!integrated) throw new Error(`worker commit is not integrated: ${workerName}`);
   const worktreeInspection = inspectWorkerWorktree(worker);
   if (!worktreeInspection.ok) throw new Error(`worker cleanup refused: ${worktreeInspection.reason}`);
@@ -654,7 +709,8 @@ export function resumeTeam(cwd, name, { model, env = process.env, spawnProcess =
     throw new Error('otx team resume requires running inside tmux for the tmux backend.');
   }
   const requestedAt = new Date().toISOString();
-  updateTeamConfig(state.stateDir, { status: 'resuming', resume_requested_at: requestedAt, resume_error: null });
+  updateTeamConfig(state.stateDir, { status: 'resuming', resume_requested_at: requestedAt, resume_error: null },
+    { allowTerminalReset: true, reason: 'leader explicitly resumed the team' });
   const args = ['resume', '--no-alt-screen', '-C', state.config.cwd];
   if (model) args.push('--model', model);
   args.push(state.config.leader_session_id, `Resume leadership of OTX team "${name}". Run team status, inspect worker results, integrate valid commits, verify the objective, then stop the team.`);

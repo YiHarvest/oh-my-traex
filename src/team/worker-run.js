@@ -109,7 +109,7 @@ while (true) {
     current_message_id: message.id,
     current_task_id: message.task_id,
     blocked_task_ids: [],
-  });
+  }, { allowTerminalReset: true, reason: 'worker accepted a follow-up message' });
   const followupBaseCommit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: worktreePath, encoding: 'utf8' }).stdout.trim();
   const followupStartState = JSON.parse(readFileSync(join(stateDir, 'workers', workerName + '.json'), 'utf8'));
   const followupPath = join(stateDir, 'workers', workerName, `followup-${message.id}.md`);
@@ -229,7 +229,7 @@ function selectPendingMessage() {
       blocked_task_ids: blockedTaskIds,
       current_message_id: null,
       current_task_id: null,
-    });
+    }, { allowTerminalReset: true, reason: 'worker found only dependency-blocked follow-up tasks' });
   }
   return null;
 }

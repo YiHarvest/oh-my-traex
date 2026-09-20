@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { acknowledgeMailboxMessage, addTeamWorker, claimTaskMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, completeWorkerTurn, createTeamTask, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask, recoverDeliveryTransactions, removeTeamWorker, renewMailboxDelivery, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateWorkerState, withStateLock, writeJsonAtomic } from '../src/team/state.js';
+import { acknowledgeMailboxMessage, addTeamWorker, claimTaskMessage, claimTeamTask, completeClaimedTask, completeMailboxDelivery, completeWorkerTurn, createTeamTask, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask, recoverDeliveryTransactions, removeTeamWorker, renewMailboxDelivery, renewTaskClaim, sanitizeTeamName, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState, withStateLock, writeJsonAtomic } from '../src/team/state.js';
 
 test('persists team and worker state under the Git common directory', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-state-'));
@@ -46,6 +46,38 @@ test('stores mailbox messages as durable independently updated records', () => {
     assert.equal(mailbox.messages.find((message) => message.id === first.id).status, 'completed');
     assert.equal(mailbox.messages.find((message) => message.id === second.id).status, 'pending');
     assert.notEqual(first.id, second.id);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('rejects implicit terminal state resets and records explicit recovery intent', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-state-transition-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'completed', role: 'explorer', assignment: 'task', requires_commit: false };
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: '%1', leaderSessionId: 'leader-id', workers: [worker] });
+    updateTaskState(stateDir, '1', { status: 'completed' });
+    const message = enqueueMailboxMessage(stateDir, 'worker-1', 'done');
+    updateMailboxMessage(stateDir, 'worker-1', message.id, { status: 'completed' });
+    updateTeamConfig(stateDir, { status: 'ready' });
+
+    assert.throws(() => updateWorkerState(stateDir, 'worker-1', { status: 'working' }),
+      /terminal reset requires an explicit reason/);
+    assert.throws(() => updateTaskState(stateDir, '1', { status: 'pending' }),
+      /terminal reset requires an explicit reason/);
+    assert.throws(() => updateMailboxMessage(stateDir, 'worker-1', message.id, { status: 'pending' }),
+      /terminal reset requires an explicit reason/);
+    assert.throws(() => updateTeamConfig(stateDir, { status: 'running' }),
+      /terminal reset requires an explicit reason/);
+    assert.throws(() => updateWorkerState(stateDir, 'worker-1', { status: 'mystery' }),
+      /invalid worker status: mystery/);
+
+    const recovery = { allowTerminalReset: true, reason: 'test recovery' };
+    assert.equal(updateWorkerState(stateDir, 'worker-1', { status: 'working' }, recovery).status, 'working');
+    assert.equal(updateTaskState(stateDir, '1', { status: 'pending' }, recovery).status, 'pending');
+    assert.equal(updateMailboxMessage(stateDir, 'worker-1', message.id, { status: 'pending' }, recovery).status, 'pending');
+    assert.equal(updateTeamConfig(stateDir, { status: 'running' }, recovery).status, 'running');
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

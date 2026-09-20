@@ -110,20 +110,53 @@ export function listTeamStates(cwd) {
     .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
 }
 
-export function updateWorkerState(stateDir, workerName, updates) {
+const TERMINAL_STATUSES = {
+  worker: new Set(['completed', 'failed', 'cancelled']),
+  task: new Set(['completed', 'failed', 'cancelled']),
+  mailbox: new Set(['completed', 'failed', 'cancelled']),
+  config: new Set([
+    'ready', 'failed', 'integrated', 'integration_failed', 'stopped', 'cleaned',
+    'cleanup_pending', 'empty', 'resume_failed', 'recovery_required',
+  ]),
+};
+const VALID_STATUSES = {
+  worker: new Set(['starting', 'queued', 'working', 'blocked', 'completed', 'failed', 'cancelled']),
+  task: new Set(['pending', 'blocked', 'in_progress', 'completed', 'failed', 'cancelled']),
+  mailbox: new Set(['pending', 'working', 'completed', 'failed', 'cancelled']),
+  config: new Set([
+    'running', 'resuming', 'ready', 'failed', 'integrated', 'integration_failed', 'stopped',
+    'cleaned', 'cleanup_pending', 'empty', 'resume_failed', 'recovery_required',
+  ]),
+};
+
+function assertStatusTransition(kind, currentStatus, nextStatus, options = {}) {
+  if (!nextStatus || nextStatus === currentStatus) return;
+  if (!VALID_STATUSES[kind].has(nextStatus)) throw new Error(`invalid ${kind} status: ${nextStatus}`);
+  if (!TERMINAL_STATUSES[kind].has(currentStatus) || TERMINAL_STATUSES[kind].has(nextStatus)) return;
+  if (!options.allowTerminalReset) {
+    throw new Error(`invalid ${kind} status transition: ${currentStatus} -> ${nextStatus}; terminal reset requires an explicit reason`);
+  }
+  if (typeof options.reason !== 'string' || options.reason.trim() === '') {
+    throw new Error(`invalid ${kind} status transition: ${currentStatus} -> ${nextStatus}; terminal reset reason is required`);
+  }
+}
+
+export function updateWorkerState(stateDir, workerName, updates, options = {}) {
   return withRecordLock(stateDir, `worker-${workerName}`, () => {
     const path = workerStatePath(stateDir, workerName);
     const current = readJson(path);
+    assertStatusTransition('worker', current.status, updates.status, options);
     const next = { ...current, ...updates, updated_at: new Date().toISOString() };
     writeJsonAtomic(path, next);
     return next;
   });
 }
 
-export function updateTaskState(stateDir, taskId, updates) {
+export function updateTaskState(stateDir, taskId, updates, options = {}) {
   return withTaskLock(stateDir, taskId, () => {
     const path = taskStatePath(stateDir, taskId);
     const current = readJson(path);
+    assertStatusTransition('task', current.status, updates.status, options);
     const next = {
       ...current,
       ...updates,
@@ -366,11 +399,13 @@ export function readMailbox(stateDir, workerName) {
   return { worker: workerName, messages };
 }
 
-export function updateMailboxMessage(stateDir, workerName, messageId, updates) {
+export function updateMailboxMessage(stateDir, workerName, messageId, updates, options = {}) {
   const path = mailboxMessagePath(stateDir, workerName, messageId);
   if (!existsSync(path)) throw new Error(`mailbox message not found: ${messageId}`);
   return withRecordLock(stateDir, `mailbox-${messageId}`, () => {
-    const updated = { ...readJson(path), ...updates, updated_at: new Date().toISOString() };
+    const current = readJson(path);
+    assertStatusTransition('mailbox', current.status, updates.status, options);
+    const updated = { ...current, ...updates, updated_at: new Date().toISOString() };
     writeJsonAtomic(path, updated);
     return updated;
   });
@@ -645,10 +680,11 @@ function finishDeliveryTransaction({ path, transaction }) {
   writeJsonAtomic(path, { ...transaction, status: 'committed', completed_at: new Date().toISOString() });
 }
 
-export function updateTeamConfig(stateDir, updates) {
+export function updateTeamConfig(stateDir, updates, options = {}) {
   return withRecordLock(stateDir, 'team-config', () => {
     const path = join(stateDir, 'config.json');
     const current = readJson(path);
+    assertStatusTransition('config', current.status, updates.status, options);
     const next = { ...current, ...updates, updated_at: new Date().toISOString() };
     writeJsonAtomic(path, next);
     return next;
