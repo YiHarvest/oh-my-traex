@@ -420,6 +420,59 @@ export function completeMailboxDelivery(stateDir, workerName, messageId, receipt
   });
 }
 
+export function completeWorkerTurn(stateDir, {
+  workerName, messageId = null, taskId = null, taskToken = null, receiptToken = null,
+  taskUpdates = {}, messageUpdates = {}, workerUpdates = {},
+}) {
+  if (!messageId && !taskId) throw new Error('worker turn completion requires a task or mailbox message');
+  const messagePath = messageId ? mailboxMessagePath(stateDir, workerName, messageId) : null;
+  if (messagePath && !existsSync(messagePath)) throw new Error(`mailbox message not found: ${messageId}`);
+  const lockNames = [`worker-${workerName}`];
+  if (messageId) lockNames.push(`mailbox-${messageId}`);
+  if (taskId) lockNames.push(`task-${taskId}`);
+  return withOrderedRecordLocks(stateDir, lockNames.sort(), () => {
+    const message = messagePath ? readJson(messagePath) : null;
+    if (message) {
+      if (message.status !== 'working' || message.receipt?.worker !== workerName
+        || message.receipt?.token !== receiptToken) {
+        return { ok: false, error: 'receipt_mismatch', message };
+      }
+      if (Date.parse(message.receipt.leased_until) <= Date.now()) {
+        return { ok: false, error: 'lease_expired', message };
+      }
+    }
+    let task = null;
+    if (taskId) {
+      task = readTeamTask(stateDir, taskId);
+      if (task.status !== 'in_progress' || task.claim?.owner !== workerName
+        || task.claim?.token !== taskToken) {
+        return { ok: false, error: 'claim_mismatch', task, message };
+      }
+      if (Date.parse(task.claim.leased_until) <= Date.now()) {
+        return { ok: false, error: 'lease_expired', task, message };
+      }
+    }
+    const now = new Date().toISOString();
+    const completedTask = task ? {
+      ...task, ...taskUpdates, claim: null, version: (task.version || 1) + 1, updated_at: now,
+    } : null;
+    const completedMessage = message ? {
+      ...message, ...messageUpdates, receipt: message.receipt, updated_at: now,
+    } : null;
+    const workerPath = workerStatePath(stateDir, workerName);
+    const completedWorker = { ...readJson(workerPath), ...workerUpdates, updated_at: now };
+    const transaction = beginDeliveryTransaction(stateDir, {
+      operation: 'complete', workerName, messageId, taskId,
+      task: completedTask, message: completedMessage, worker: completedWorker,
+    });
+    if (completedTask) writeJsonAtomic(taskStatePath(stateDir, taskId), completedTask);
+    if (completedMessage) writeJsonAtomic(messagePath, completedMessage);
+    writeJsonAtomic(workerPath, completedWorker);
+    finishDeliveryTransaction(transaction);
+    return { ok: true, task: completedTask, message: completedMessage, worker: completedWorker };
+  });
+}
+
 export function renewMailboxDelivery(stateDir, workerName, messageId, receiptToken) {
   const path = mailboxMessagePath(stateDir, workerName, messageId);
   if (!existsSync(path)) throw new Error(`mailbox message not found: ${messageId}`);
@@ -534,7 +587,7 @@ export function claimTaskMessage(stateDir, workerName, messageId) {
       updated_at: now,
     };
     const transaction = beginDeliveryTransaction(stateDir, {
-      workerName, messageId, taskId: task.id, task: claimedTask, message: claimedMessage,
+      operation: 'claim', workerName, messageId, taskId: task.id, task: claimedTask, message: claimedMessage,
     });
     try {
       writeJsonAtomic(taskStatePath(stateDir, task.id), claimedTask);
@@ -557,10 +610,19 @@ export function recoverDeliveryTransactions(stateDir) {
     const path = join(directory, name);
     const transaction = readJson(path);
     if (transaction.status !== 'active') continue;
-    const lockNames = [`mailbox-${transaction.message_id}`, `task-${transaction.task_id}`].sort();
+    const lockNames = [];
+    if (transaction.message_id) lockNames.push(`mailbox-${transaction.message_id}`);
+    if (transaction.task_id) lockNames.push(`task-${transaction.task_id}`);
+    if (transaction.worker_state) lockNames.push(`worker-${transaction.worker}`);
+    lockNames.sort();
     withOrderedRecordLocks(stateDir, lockNames, () => {
-      writeJsonAtomic(taskStatePath(stateDir, transaction.task_id), transaction.task);
-      writeJsonAtomic(mailboxMessagePath(stateDir, transaction.worker, transaction.message_id), transaction.message);
+      if (transaction.task) writeJsonAtomic(taskStatePath(stateDir, transaction.task_id), transaction.task);
+      if (transaction.message) {
+        writeJsonAtomic(mailboxMessagePath(stateDir, transaction.worker, transaction.message_id), transaction.message);
+      }
+      if (transaction.worker_state) {
+        writeJsonAtomic(workerStatePath(stateDir, transaction.worker), transaction.worker_state);
+      }
       writeJsonAtomic(path, { ...transaction, status: 'recovered', recovered_at: new Date().toISOString() });
     });
     recovered.push(transaction.id);
@@ -568,11 +630,12 @@ export function recoverDeliveryTransactions(stateDir) {
   return recovered;
 }
 
-function beginDeliveryTransaction(stateDir, { workerName, messageId, taskId, task, message }) {
+function beginDeliveryTransaction(stateDir, { operation = 'claim', workerName, messageId, taskId, task, message, worker }) {
   const transaction = {
-    schema_version: 1, id: randomUUID(), status: 'active', worker: workerName,
+    schema_version: 1, id: randomUUID(), operation, status: 'active', worker: workerName,
     message_id: messageId, task_id: taskId, task, message, created_at: new Date().toISOString(),
   };
+  if (worker) transaction.worker_state = worker;
   const path = join(stateDir, 'delivery-transactions', `${transaction.id}.json`);
   writeJsonAtomic(path, transaction);
   return { path, transaction };
