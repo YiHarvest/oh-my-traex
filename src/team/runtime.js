@@ -92,13 +92,13 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       writeFileSync(promptPath, buildWorkerPrompt({ teamName: name, worker, task }), 'utf8');
       const workerArgs = [stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, model || ''];
       const launched = mux.launchWorker({ cwd: worker.worktree_path, command: process.execPath, args: [runner, ...workerArgs], worker, config });
-      createdPanes.push({ name: worker.name, pane_id: launched.id, pane_pid: launched.pid });
-      updateWorkerState(stateDir, worker.name, { pane_id: launched.id, pane_pid: launched.pid, session_id: sessionId, result_path: resultPath, prompt_path: promptPath });
+      createdPanes.push({ name: worker.name, pane_id: launched.id, pane_pid: launched.pid, process_identity: launched.processIdentity });
+      updateWorkerState(stateDir, worker.name, { pane_id: launched.id, pane_pid: launched.pid, process_identity: launched.processIdentity, session_id: sessionId, result_path: resultPath, prompt_path: promptPath });
       updateTeamTransaction(transaction, {
         phase: 'panes-starting',
         resources: {
           workers: transaction.record.resources.workers.map((candidate) => candidate.name === worker.name
-            ? { ...candidate, pane_id: launched.id, pane_pid: launched.pid, session_id: sessionId }
+            ? { ...candidate, pane_id: launched.id, pane_pid: launched.pid, process_identity: launched.processIdentity, session_id: sessionId }
             : candidate),
         },
       });
@@ -109,6 +109,7 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
     Object.assign(config, updateTeamConfig(stateDir, {
       supervisor_pane_id: supervisor.id,
       supervisor_pane_pid: supervisor.pid,
+      supervisor_process_identity: supervisor.processIdentity,
       supervisor_started_at: new Date().toISOString(),
     }));
     mux.layout();
@@ -260,6 +261,7 @@ export function stopTeam(cwd, name, run = spawnSync) {
     name: 'supervisor',
     pane_id: state.config.supervisor_pane_id,
     pane_pid: state.config.supervisor_pane_pid,
+    process_identity: state.config.supervisor_process_identity,
   };
   terminateOwnedRuntime(run, supervisor, state.config);
   updateTeamConfig(state.stateDir, { status: 'stopped', stopped_at: new Date().toISOString() });
@@ -524,6 +526,7 @@ function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env
   let task;
   let paneId = null;
   let panePid = null;
+  let launched = null;
   let membershipAdded = false;
   try {
     worker = createWorkerWorktree({ repoRoot: state.config.cwd, teamName: name, worker: workerBase });
@@ -539,26 +542,27 @@ function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env
     writeFileSync(promptPath, buildWorkerPrompt({ teamName: name, worker, task: assignment }), 'utf8');
     const runner = join(dirname(fileURLToPath(import.meta.url)), 'worker-run.js');
     const workerArgs = [state.stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, model || state.config.model || ''];
-    const launched = mux.launchWorker({ cwd: worker.worktree_path, command: process.execPath, args: [runner, ...workerArgs], worker, config: state.config });
+    launched = mux.launchWorker({ cwd: worker.worktree_path, command: process.execPath, args: [runner, ...workerArgs], worker, config: state.config });
     paneId = launched.id;
     panePid = launched.pid;
     const updated = updateWorkerState(state.stateDir, worker.name, {
       initial_task_id: task.id,
       pane_id: paneId,
       pane_pid: panePid,
+      process_identity: launched.processIdentity,
       session_id: sessionId,
       result_path: resultPath,
       prompt_path: promptPath,
     });
     updateTeamTransaction(transaction, {
       phase: 'pane-started',
-      resources: { workers: [{ ...worker, pane_id: paneId, pane_pid: updated.pane_pid, session_id: sessionId }] },
+      resources: { workers: [{ ...worker, pane_id: paneId, pane_pid: updated.pane_pid, process_identity: launched.processIdentity, session_id: sessionId }] },
     });
     mux.layout();
     finishTeamTransaction(transaction);
     return { worker: updated, task };
   } catch (error) {
-    if (paneId) mux.terminate({ name: worker?.name, pane_id: paneId, pane_pid: panePid });
+    if (paneId) mux.terminate({ name: worker?.name, pane_id: paneId, pane_pid: panePid, process_identity: launched?.processIdentity });
     if (task) updateTaskState(state.stateDir, task.id, {
       status: 'failed', error: error.message, completed_at: new Date().toISOString(),
     });
@@ -644,20 +648,57 @@ export function removeWorker(cwd, name, workerName, run = spawnSync) {
   return { worker: workerName, status: 'removed', cleanup };
 }
 
-export function resumeTeam(cwd, name, { model, env = process.env, run = spawnSync } = {}) {
+export function resumeTeam(cwd, name, { model, env = process.env, spawnProcess = spawn } = {}) {
   const state = readTeamState(cwd, name);
   if ((state.config.mux_backend || 'tmux') === 'tmux' && (!env.TMUX || !env.TMUX_PANE)) {
     throw new Error('otx team resume requires running inside tmux for the tmux backend.');
   }
-  updateTeamConfig(state.stateDir, {
-    leader_pane_id: state.config.mux_backend === 'headless' ? `process:${process.pid}` : env.TMUX_PANE,
-    status: 'running',
-    resumed_at: new Date().toISOString(),
-  });
+  const requestedAt = new Date().toISOString();
+  updateTeamConfig(state.stateDir, { status: 'resuming', resume_requested_at: requestedAt, resume_error: null });
   const args = ['resume', '--no-alt-screen', '-C', state.config.cwd];
   if (model) args.push('--model', model);
   args.push(state.config.leader_session_id, `Resume leadership of OTX team "${name}". Run team status, inspect worker results, integrate valid commits, verify the objective, then stop the team.`);
-  return run('traex', args, { cwd: state.config.cwd, stdio: 'inherit' });
+  return new Promise((resolve) => {
+    let started = false;
+    let settled = false;
+    let child;
+    try {
+      child = spawnProcess('traex', args, { cwd: state.config.cwd, stdio: 'inherit' });
+    } catch (error) {
+      updateTeamConfig(state.stateDir, {
+        status: 'resume_failed', resume_failed_at: new Date().toISOString(), resume_error: error.message,
+      });
+      resolve({ status: 1, error });
+      return;
+    }
+    child.once('spawn', () => {
+      started = true;
+      updateTeamConfig(state.stateDir, {
+        leader_pane_id: state.config.mux_backend === 'headless' ? `process:${process.pid}` : env.TMUX_PANE,
+        status: 'running',
+        resumed_at: new Date().toISOString(),
+      });
+    });
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      updateTeamConfig(state.stateDir, {
+        status: 'resume_failed', resume_failed_at: new Date().toISOString(), resume_error: error.message,
+      });
+      resolve({ status: 1, error });
+    });
+    child.once('close', (code) => {
+      if (settled) return;
+      settled = true;
+      const status = code ?? 1;
+      if (!started || status !== 0) updateTeamConfig(state.stateDir, {
+        status: 'resume_failed', resume_failed_at: new Date().toISOString(),
+        resume_error: `traex resume exited ${status}`,
+      });
+      else updateTeamConfig(state.stateDir, { resume_leader_exited_at: new Date().toISOString() });
+      resolve({ status });
+    });
+  });
 }
 
 function paneOwnedBy(run, workerState, config) {

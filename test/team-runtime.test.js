@@ -4,8 +4,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { readMailbox, initTeamState, readTeamState, updateWorkerState } from '../src/team/state.js';
-import { reconcileTeam, stopTeam, teamStatus } from '../src/team/runtime.js';
+import { reconcileTeam, resumeTeam, stopTeam, teamStatus } from '../src/team/runtime.js';
 
 test('reports a live worker as stalled when TraeX has no recent activity', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'otx-runtime-'));
@@ -113,6 +114,71 @@ test('stop refuses to kill a pane when persisted owner proof does not match', ()
     };
     stopTeam(cwd, 'demo', run);
     assert.equal(calls.some((call) => call.args[0] === 'kill-pane'), false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('resume publishes running only after TraeX actually spawns', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-resume-started-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'completed', role: 'reviewer', assignment: 'task', requires_commit: false, worktree_path: cwd };
+    initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: 'process:1', leaderSessionId: 'leader', muxBackend: 'headless', workers: [worker] });
+    let child;
+    const resumed = resumeTeam(cwd, 'demo', {
+      spawnProcess: () => {
+        child = new EventEmitter();
+        process.nextTick(() => { child.emit('spawn'); child.emit('close', 0); });
+        return child;
+      },
+    });
+    assert.equal(readTeamState(cwd, 'demo').config.status, 'resuming');
+    assert.equal((await resumed).status, 0);
+    const config = readTeamState(cwd, 'demo').config;
+    assert.equal(config.status, 'running');
+    assert.ok(config.resumed_at);
+    assert.ok(config.resume_leader_exited_at);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('resume records startup failure without false running state', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-resume-failed-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'completed', role: 'reviewer', assignment: 'task', requires_commit: false, worktree_path: cwd };
+    initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: 'process:1', leaderSessionId: 'leader', muxBackend: 'headless', workers: [worker] });
+    const result = await resumeTeam(cwd, 'demo', {
+      spawnProcess: () => {
+        const child = new EventEmitter();
+        process.nextTick(() => { child.emit('error', new Error('spawn denied')); child.emit('close', 1); });
+        return child;
+      },
+    });
+    assert.equal(result.status, 1);
+    const config = readTeamState(cwd, 'demo').config;
+    assert.equal(config.status, 'resume_failed');
+    assert.equal(config.resume_error, 'spawn denied');
+    assert.equal(config.resumed_at, undefined);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('resume records a synchronous process launch failure', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-resume-thrown-'));
+  try {
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd }).status, 0);
+    const worker = { name: 'worker-1', index: 1, status: 'completed', role: 'reviewer', assignment: 'task', requires_commit: false, worktree_path: cwd };
+    initTeamState({ cwd, name: 'demo', task: 'task', leaderPaneId: 'process:1', leaderSessionId: 'leader', muxBackend: 'headless', workers: [worker] });
+    const result = await resumeTeam(cwd, 'demo', {
+      spawnProcess: () => { throw new Error('invalid cwd'); },
+    });
+    assert.equal(result.status, 1);
+    assert.equal(readTeamState(cwd, 'demo').config.status, 'resume_failed');
+    assert.equal(readTeamState(cwd, 'demo').config.resume_error, 'invalid cwd');
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
