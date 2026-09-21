@@ -11,16 +11,17 @@ const installRoot = join(root, 'install');
 const repo = join(root, 'repo');
 const binDir = join(root, 'bin');
 const cache = join(root, 'npm-cache');
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const npmCli = process.env.npm_execpath;
+if (!npmCli) throw new Error('packed headless E2E must be started through npm');
 
 try {
   for (const directory of [installRoot, repo, binDir]) mkdirSync(directory, { recursive: true });
-  const pack = run(npm, ['pack', '--pack-destination', root], {
+  const pack = run(process.execPath, [npmCli, 'pack', '--pack-destination', root], {
     cwd: projectRoot,
     env: { ...process.env, npm_config_cache: cache },
   });
   const tarball = join(root, pack.stdout.trim().split(/\r?\n/).at(-1));
-  run(npm, ['install', '--prefix', installRoot, tarball], {
+  run(process.execPath, [npmCli, 'install', '--prefix', installRoot, tarball], {
     env: { ...process.env, npm_config_cache: cache },
   });
 
