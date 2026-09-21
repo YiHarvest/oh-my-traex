@@ -19,12 +19,15 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      - run: sudo apt-get update && sudo apt-get install -y tmux
       - run: npm test
       - run: npm run test:coverage
+      - run: npm run test:stress
       - run: npm run pack:check
+      - run: npm run test:e2e:packed
       - name: Verify release tag
         run: |
-          test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+          npm run release:check -- "$GITHUB_REF_NAME"
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - run: npm publish --provenance

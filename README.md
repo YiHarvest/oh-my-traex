@@ -8,7 +8,8 @@
 
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-339933?logo=node.js&logoColor=white)](package.json)
 [![TraeX](https://img.shields.io/badge/TraeX-multi__agent-3b82f6)](https://www.trae.ai/)
-[![Tests](https://img.shields.io/badge/tests-54%20passing-22c55e)](#开发与验证)
+[![CI](https://github.com/YiHarvest/oh-my-traex/actions/workflows/ci.yml/badge.svg)](https://github.com/YiHarvest/oh-my-traex/actions/workflows/ci.yml)
+[![Packed Runtime E2E](https://github.com/YiHarvest/oh-my-traex/actions/workflows/runtime-e2e.yml/badge.svg)](https://github.com/YiHarvest/oh-my-traex/actions/workflows/runtime-e2e.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [快速开始](#体验当前版本) · [架构](#系统架构) · [Dashboard](#实时-dashboard) · [命令参考](#命令参考) · [English](README.en.md)
@@ -206,6 +207,7 @@ npm run test:coverage
 npm run test:stress
 npm run test:e2e:packed
 npm run pack:check
+npm run release:check
 npm run doctor
 npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"

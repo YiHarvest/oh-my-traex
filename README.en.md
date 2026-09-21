@@ -8,7 +8,8 @@ A TraeX-native orchestration layer inspired by `oh-my-codex`: keep lightweight n
 
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-339933?logo=node.js&logoColor=white)](package.json)
 [![TraeX](https://img.shields.io/badge/TraeX-multi__agent-3b82f6)](https://www.trae.ai/)
-[![Tests](https://img.shields.io/badge/tests-54%20passing-22c55e)](#development-and-verification)
+[![CI](https://github.com/YiHarvest/oh-my-traex/actions/workflows/ci.yml/badge.svg)](https://github.com/YiHarvest/oh-my-traex/actions/workflows/ci.yml)
+[![Packed Runtime E2E](https://github.com/YiHarvest/oh-my-traex/actions/workflows/runtime-e2e.yml/badge.svg)](https://github.com/YiHarvest/oh-my-traex/actions/workflows/runtime-e2e.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [Quick start](#try-the-current-version) · [Architecture](#system-architecture) · [Dashboard](#live-dashboard) · [Command reference](#command-reference) · [简体中文](README.md)
@@ -206,6 +207,7 @@ npm run test:coverage
 npm run test:stress
 npm run test:e2e:packed
 npm run pack:check
+npm run release:check
 npm run doctor
 npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"
