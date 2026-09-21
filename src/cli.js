@@ -41,6 +41,18 @@ Options:
       --read-only           Run the lead with a read-only sandbox
       --ui <none|dashboard> Open a TraeX dashboard in a sibling tmux pane
       --json                Ask TraeX exec for JSONL events
+  -p, --profile <profile>   Forward a TraeX configuration profile
+  -i, --image <file>        Attach an image (repeatable)
+      --add-dir <directory> Add a writable directory (repeatable)
+      --ephemeral           Do not persist the TraeX session
+  -o, --output-last-message <file>  Save the final response
+      --output-schema <file>        Require a JSON response schema
+      --color <mode>        always | never | auto
+      --allowed-tool <tool> Allow a tool (repeatable)
+      --disallowed-tool <tool> Disallow a tool (repeatable)
+      --shell-tool-timeout <duration>  Set the shell command timeout
+      --enable|--disable <feature>    Override a TraeX feature
+      --oss [--local-provider <provider>]  Use an OSS provider
       --dry-run             Print the TraeX command and prompt without running
   -h, --help                Show this help
 
@@ -62,6 +74,9 @@ export async function main(argv = process.argv.slice(2)) {
     if (options.ui === 'dashboard' && options.json) {
       throw new Error('--json cannot be used with --ui dashboard.');
     }
+    if (options.ui === 'dashboard' && options.passthrough.length > 0) {
+      throw new Error('native TraeX exec options cannot be used with --ui dashboard.');
+    }
 
     const prompt = buildOrchestratorPrompt({ task, workers: options.workers, mode: options.mode });
     if (command === 'prompt') return print(prompt);
@@ -77,6 +92,7 @@ export async function main(argv = process.argv.slice(2)) {
     ];
     if (options.model) traeArgs.push('--model', options.model);
     if (options.json) traeArgs.push('--json');
+    traeArgs.push(...options.passthrough);
     traeArgs.push(prompt);
 
     if (options.dryRun) {

@@ -36,3 +36,32 @@ test('parses dashboard UI mode', () => {
 test('rejects unknown UI modes', () => {
   assert.throws(() => parseArgs(['exec', '--ui', 'windows', 'task']), /none or dashboard/);
 });
+
+test('forwards a controlled subset of native TraeX exec options', () => {
+  const parsed = parseArgs([
+    'exec', '--profile', 'work', '-i', 'one.png', '--image=two.png',
+    '--add-dir', '../shared', '--ephemeral', '--output-schema=schema.json',
+    '-o', 'result.txt', '--color', 'never', '--allowed-tool', 'shell',
+    '--disallowed-tool=browser', '--shell-tool-timeout', '2m',
+    '--enable', 'feature-a', '--disable=feature-b', '--oss',
+    '--local-provider', 'ollama', 'inspect', 'this',
+  ]);
+  assert.equal(parsed.task, 'inspect this');
+  assert.deepEqual(parsed.options.passthrough, [
+    '--profile', 'work', '--image', 'one.png', '--image', 'two.png',
+    '--add-dir', '../shared', '--ephemeral', '--output-schema', 'schema.json',
+    '--output-last-message', 'result.txt', '--color', 'never', '--allowed-tool', 'shell',
+    '--disallowed-tool', 'browser', '--shell-tool-timeout', '2m',
+    '--enable', 'feature-a', '--disable', 'feature-b', '--oss',
+    '--local-provider', 'ollama',
+  ]);
+});
+
+test('rejects native options that would override the OTX execution boundary', () => {
+  for (const args of [
+    ['--permission-mode', 'bypass_permissions'], ['--sandbox=danger-full-access'],
+    ['-c', 'approval_policy=never'], ['--ignore-rules'], ['-y'],
+  ]) {
+    assert.throws(() => parseArgs(['exec', ...args, 'task']), /managed by OTX/);
+  }
+});

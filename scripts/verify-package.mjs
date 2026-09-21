@@ -41,9 +41,12 @@ try {
   assert.equal(doctorHelp.status, 0, doctorHelp.stderr || 'installed otx doctor --help failed');
   assert.match(doctorHelp.stdout, /otx doctor \[--live\]/, 'installed package does not expose live doctor');
   assert.match(help.stdout, /otx exec/, 'installed otx help does not expose the canonical exec command');
-  const dryRun = spawnSync(binary, ['exec', '--dry-run', 'verify installed package'], { encoding: 'utf8' });
+  const dryRun = spawnSync(binary, [
+    'exec', '--dry-run', '--ephemeral', '--allowed-tool', 'shell', 'verify installed package',
+  ], { encoding: 'utf8' });
   assert.equal(dryRun.status, 0, dryRun.stderr || 'installed otx dry-run failed');
   assert.match(dryRun.stdout, /traex exec/, 'installed otx binary did not execute main');
+  assert.match(dryRun.stdout, /--ephemeral --allowed-tool shell/, 'installed otx binary did not forward native exec options');
 } finally {
   rmSync(installRoot, { recursive: true, force: true });
 }
