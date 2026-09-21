@@ -8,6 +8,10 @@ export const REQUIRED_TRAE_CAPABILITIES = Object.freeze([
   'json', 'resume', 'sandbox', 'permissionMode', 'sessionId', 'outputLastMessage', 'projectConfig',
   'resumeJson', 'resumePermissionMode', 'resumeOutputLastMessage', 'resumeProjectConfig',
 ]);
+export const REQUIRED_TRAE_CLI_CAPABILITIES = Object.freeze([
+  'resumeLast', 'resumeAll', 'review', 'reviewUncommitted', 'reviewBase', 'reviewCommit',
+  'reviewPermissionMode', 'reviewJson', 'reviewOutputLastMessage', 'reviewProjectConfig',
+]);
 
 export function projectTrustArgs(worktreePath) {
   const quotedPath = JSON.stringify(worktreePath);
@@ -32,6 +36,8 @@ export function detectTraeCapabilities(run = spawnSync) {
     outputLastMessage: execHelp.includes('--output-last-message'),
     projectConfig: execHelp.includes('--config'),
     ephemeral: execHelp.includes('--ephemeral'),
+    resumeLast: resumeHelp.includes('--last'),
+    resumeAll: resumeHelp.includes('--all'),
     resumeJson: resumeHelp.includes('--json'),
     resumePermissionMode: resumeHelp.includes('--permission-mode'),
     resumeOutputLastMessage: resumeHelp.includes('--output-last-message'),
@@ -42,6 +48,29 @@ export function detectTraeCapabilities(run = spawnSync) {
   const missing = REQUIRED_TRAE_CAPABILITIES.filter((name) => !capabilities[name]);
   if (missing.length > 0) throw new Error(`TraeX is missing required capabilities: ${missing.join(', ')}`);
   return capabilities;
+}
+
+export function detectTraeCliCapabilities(run = spawnSync) {
+  const capabilities = detectTraeCapabilities(run);
+  const exec = run('traex', ['exec', '--help'], { encoding: 'utf8' });
+  const review = run('traex', ['exec', 'review', '--help'], { encoding: 'utf8' });
+  const execHelp = `${exec.stdout || ''}\n${exec.stderr || ''}`;
+  const reviewHelp = `${review.stdout || ''}\n${review.stderr || ''}`;
+  return {
+    ...capabilities,
+    review: /Commands:[\s\S]*\breview\b/.test(execHelp) && !review.error && review.status === 0,
+    reviewUncommitted: reviewHelp.includes('--uncommitted'),
+    reviewBase: reviewHelp.includes('--base'),
+    reviewCommit: reviewHelp.includes('--commit'),
+    reviewPermissionMode: reviewHelp.includes('--permission-mode'),
+    reviewJson: reviewHelp.includes('--json'),
+    reviewOutputLastMessage: reviewHelp.includes('--output-last-message'),
+    reviewProjectConfig: reviewHelp.includes('--config'),
+  };
+}
+
+export function missingTraeCliCapabilities(capabilities) {
+  return REQUIRED_TRAE_CLI_CAPABILITIES.filter((name) => !capabilities[name]);
 }
 
 export function permissionArgs(sandbox) {

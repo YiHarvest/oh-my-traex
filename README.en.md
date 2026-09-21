@@ -183,6 +183,8 @@ Example state tree:
 | `otx doctor` | Statically check Node, TraeX, Git, tmux, and multi-agent features |
 | `otx doctor --live [-C repo] [-m model]` | Make a minimal read-only request to verify TraeX auth, model, and backend routing |
 
+The static doctor also verifies the native TraeX arguments required by `otx exec`, `resume`, and `review`; older installations receive an exact list of missing capabilities.
+
 Mailbox delivery uses one-time receipt tokens so concurrent consumers cannot process the same message twice. `reconcile` automatically reschedules a failed worker task at most once, preferring a healthy worker with the same role and write requirement. Delivery, completion, and rescheduling transitions are recorded as atomic events for incremental consumers.
 
 ## Safety boundaries

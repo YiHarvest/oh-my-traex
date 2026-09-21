@@ -11,7 +11,7 @@ import { parseDoctorArgs, runLiveExecCheck } from './doctor.js';
 import { readTaskInput } from './stdin.js';
 import { scheduleDashboardPrompt, startDashboardRuntime, startDashboardUi, stopDashboardRuntime } from './dashboard.js';
 import { runTeamCommand } from './team/cli.js';
-import { detectTraeCapabilities, permissionArgs, TRAE_PLANNER_SANDBOX, TRAE_WORKER_SANDBOX } from './team/trae.js';
+import { detectTraeCliCapabilities, missingTraeCliCapabilities, permissionArgs, TRAE_PLANNER_SANDBOX, TRAE_WORKER_SANDBOX } from './team/trae.js';
 
 const HELP = `oh-my-traex (otx) - TraeX-native multi-agent orchestration
 
@@ -286,8 +286,11 @@ function doctor(argv = []) {
   checks.push(['TraeX multi_agent_v2 enabled', /multi_agent_v2\s+stable\s+true/.test(featureText), 'recommended']);
   let capabilities;
   try {
-    capabilities = detectTraeCapabilities();
+    capabilities = detectTraeCliCapabilities();
     checks.push(['TraeX exec contract', true, Object.entries(capabilities).filter(([, enabled]) => enabled).map(([name]) => name).join(', ')]);
+    const missingCli = missingTraeCliCapabilities(capabilities);
+    checks.push(['TraeX exec resume/review contract', missingCli.length === 0,
+      missingCli.length === 0 ? 'supported' : `missing: ${missingCli.join(', ')}`]);
   } catch (error) {
     checks.push(['TraeX exec contract', false, error.message]);
   }
