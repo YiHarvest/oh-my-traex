@@ -48,6 +48,8 @@ Tasks may also come from stdin: `echo "review this repository" | otx exec`, or e
 
 Continue the latest OTX/TraeX session with `otx exec resume --last "Run the remaining tests"`. You can also pass an explicit session ID or read the follow-up from stdin with `otx exec resume --last - < follow-up.md`. Resume continues the original session without injecting the orchestration prompt again and keeps OTX's non-interactive permission contract enforced.
 
+Native code review also follows the `traex exec` shape: `otx exec review --uncommitted`, `otx exec review --base main`, `otx exec review --commit <sha>`, or custom review instructions.
+
 Start a durable Team from inside tmux:
 
 ```bash
@@ -153,6 +155,7 @@ Example state tree:
 | `otx exec <task>` | Start a TraeX leader using native children |
 | `otx exec resume --last [follow-up]` | Continue the latest TraeX session within the same permission boundary |
 | `otx exec resume <session-id> [follow-up]` | Continue a specific TraeX session by ID |
+| `otx exec review --uncommitted|--base <branch>|--commit <sha>` | Run a native TraeX code review |
 | `otx exec --ui dashboard <task>` | Start the TraeX app-server/session viewer combination |
 | `otx run <task>` | Compatibility alias for `otx exec` |
 | `otx prompt <task>` | Print the leader orchestration prompt |

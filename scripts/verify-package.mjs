@@ -57,6 +57,13 @@ try {
   assert.match(resume.stdout, /traex exec resume/, 'installed otx binary did not expose exec resume');
   assert.match(resume.stdout, /--permission-mode custom/, 'installed otx resume lost the permission contract');
   assert.match(resume.stdout, /--last/, 'installed otx resume did not select the latest session');
+  const review = spawnSync(binary, [
+    'exec', 'review', '--base', 'main', '--dry-run', '--output-last-message', 'review.txt',
+  ], { encoding: 'utf8' });
+  assert.equal(review.status, 0, review.stderr || 'installed otx review dry-run failed');
+  assert.match(review.stdout, /traex exec review/, 'installed otx binary did not expose exec review');
+  assert.match(review.stdout, /--permission-mode custom/, 'installed otx review lost the permission contract');
+  assert.match(review.stdout, /--base main/, 'installed otx review did not preserve the review target');
 } finally {
   rmSync(installRoot, { recursive: true, force: true });
 }

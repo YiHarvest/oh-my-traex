@@ -110,6 +110,45 @@ test('exec resume exposes focused help and rejects permission overrides', () => 
   assert.match(rejected.stderr, /--sandbox is managed by OTX/);
 });
 
+test('exec review dry-run forwards a revision selector and permission contract', () => {
+  const result = spawnSync(
+    process.execPath,
+    ['src/cli.js', 'exec', 'review', '--base', 'main', '--dry-run', '--json',
+      '--output-last-message', 'review.txt'],
+    { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /traex exec review --skip-git-repo-check/);
+  assert.match(result.stdout, /--permission-mode custom/);
+  assert.match(result.stdout, /approval_policy=/);
+  assert.match(result.stdout, /--base main --json --output-last-message review.txt/);
+});
+
+test('exec review reads custom instructions from stdin without orchestration wrapping', () => {
+  const result = spawnSync(process.execPath, ['src/cli.js', 'exec', 'review', '--dry-run', '-'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8', input: 'focus on data races\n',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /"<review-prompt>"/);
+  assert.match(result.stdout, /focus on data races/);
+  assert.doesNotMatch(result.stdout, /<oh_my_traex>/);
+});
+
+test('exec review exposes focused help and rejects mixed review scopes', () => {
+  const help = spawnSync(process.execPath, ['src/cli.js', 'exec', 'review', '--help'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8',
+  });
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /otx exec review --uncommitted/);
+
+  const mixed = spawnSync(
+    process.execPath, ['src/cli.js', 'exec', 'review', '--base', 'main', 'extra instructions'],
+    { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
+  );
+  assert.equal(mixed.status, 1);
+  assert.match(mixed.stderr, /revision selector or custom instructions/);
+});
+
 test('dashboard dry-run reports the planned UI without requiring tmux', () => {
   const result = spawnSync(
     process.execPath,

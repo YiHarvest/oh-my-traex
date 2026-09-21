@@ -20,6 +20,9 @@ Usage:
   otx exec [options] -            Read the task from stdin
   otx exec resume --last [options] ["follow-up"]
   otx exec resume <session> [options] ["follow-up"]
+  otx exec review --uncommitted [options]
+  otx exec review --base <branch> [options]
+  otx exec review --commit <sha> [options]
   otx run [options] "task"       Alias for otx exec
   otx prompt [options] "task"
   otx team [N:role] [options] "task"
@@ -65,6 +68,7 @@ Examples:
   otx exec -n 3 --mode conservative "Review this repository for security issues"
   echo "Review this repository" | otx exec
   otx exec resume --last "Run the remaining tests"
+  otx exec review --base main
   otx prompt "Refactor the parser without changing behavior"`;
 
 const RESUME_HELP = `oh-my-traex (otx) - resume a TraeX exec session
@@ -90,13 +94,40 @@ Options:
       --dry-run             Print the TraeX command without running
   -h, --help                Show this help`;
 
+const REVIEW_HELP = `oh-my-traex (otx) - run a native TraeX code review
+
+Usage:
+  otx exec review --uncommitted [options]
+  otx exec review --base <branch> [options]
+  otx exec review --commit <sha> [--title <title>] [options]
+  otx exec review [options] "custom review instructions"
+  otx exec review [options] -       Read custom instructions from stdin
+
+Options:
+      --uncommitted         Review staged, unstaged, and untracked changes
+      --base <branch>       Review changes against a base branch
+      --commit <sha>        Review the changes introduced by one commit
+      --title <title>       Set the commit title displayed in the summary
+  -m, --model <model>       Forward a model selection to TraeX
+  -C, --cwd <directory>     Repository to review
+      --json                Print TraeX events as JSONL
+      --ephemeral           Do not persist the review session
+  -o, --output-last-message <file>  Save the final review
+      --allowed-tool <tool>         Allow a tool (repeatable)
+      --disallowed-tool <tool>      Disallow a tool (repeatable)
+      --shell-tool-timeout <duration>  Set the shell command timeout
+      --enable|--disable <feature>     Override a TraeX feature
+      --dry-run             Print the TraeX command without running
+  -h, --help                Show this help`;
+
 export async function main(argv = process.argv.slice(2)) {
   try {
     if (argv[0] === 'team') return await runTeamCommand(argv.slice(1));
     if (argv[0] === 'dashboard') return runLiveDashboard(argv.slice(1));
     if (argv[0] === 'doctor') return doctor(argv.slice(1));
-    const { command, sessionId, task: argvTask, stdinTask, options } = parseArgs(argv);
+    const { command, sessionId, target, task: argvTask, stdinTask, options } = parseArgs(argv);
     if (command === 'resume') return runExecResume({ sessionId, argvTask, stdinTask, options });
+    if (command === 'review') return runExecReview({ target, argvTask, stdinTask, options });
     if (options.help || command === 'help') return print(HELP);
     if (command === 'roles') return print(roleCatalog());
     if (!['exec', 'prompt'].includes(command)) throw new Error(`Unknown command: ${command}`);
@@ -179,6 +210,38 @@ function runExecResume({ sessionId, argvTask, stdinTask, options }) {
     const rendered = prompt
       ? [...traeArgs.slice(0, -1), '<follow-up>']
       : traeArgs;
+    print(`traex ${rendered.map(shellQuote).join(' ')}`);
+    if (prompt) print('\n' + prompt);
+    return 0;
+  }
+
+  const result = spawnSync('traex', traeArgs, { cwd, stdio: ['ignore', 'inherit', 'inherit'] });
+  if (result.error) throw result.error;
+  return result.status ?? 1;
+}
+
+function runExecReview({ target, argvTask, stdinTask, options }) {
+  if (options.help) return print(REVIEW_HELP);
+  const prompt = readTaskInput(argvTask, { stdinTask });
+  if (target && prompt) {
+    throw new Error('exec review accepts a revision selector or custom instructions, not both.');
+  }
+  if (!target && !prompt) {
+    throw new Error('exec review requires --uncommitted, --base, --commit, or custom instructions.');
+  }
+
+  const cwd = resolve(options.cwd);
+  accessSync(cwd, constants.R_OK);
+  const traeArgs = ['exec', 'review', '--skip-git-repo-check', ...permissionArgs()];
+  if (target?.kind === 'uncommitted') traeArgs.push('--uncommitted');
+  else if (target) traeArgs.push(`--${target.kind}`, target.value);
+  if (options.model) traeArgs.push('--model', options.model);
+  if (options.json) traeArgs.push('--json');
+  traeArgs.push(...options.passthrough);
+  if (prompt) traeArgs.push(prompt);
+
+  if (options.dryRun) {
+    const rendered = prompt ? [...traeArgs.slice(0, -1), '<review-prompt>'] : traeArgs;
     print(`traex ${rendered.map(shellQuote).join(' ')}`);
     if (prompt) print('\n' + prompt);
     return 0;
