@@ -15,7 +15,7 @@
 
 </div>
 
-> **当前状态：** `main` 提供 `otx run` 原生子 Agent 编排和 `otx team` 持久化独立 worker 两条执行路径。Team runtime 已覆盖结构化规划、任务 DAG、claim lease、mailbox、动态扩缩容、安全集成与清理；Web Dashboard 通过本地 REST/SSE 控制面实时展示和操作这些状态。
+> **当前状态：** `main` 提供 `otx exec` 原生子 Agent 编排和 `otx team` 持久化独立 worker 两条执行路径。Team runtime 已覆盖结构化规划、任务 DAG、claim lease、mailbox、动态扩缩容、安全集成与清理；Web Dashboard 通过本地 REST/SSE 控制面实时展示和操作这些状态。
 
 ## 系统架构
 
@@ -37,7 +37,7 @@ otx doctor
 启动轻量原生 children 编排：
 
 ```bash
-otx run -n 3 --mode balanced "Review this repository and implement the approved fixes"
+otx exec -n 3 --mode balanced "Review this repository and implement the approved fixes"
 ```
 
 在 tmux 中启动持久化 Team：
@@ -59,14 +59,14 @@ TraeX 已经有原生 child agents，但复杂工程任务还需要另一层运�
 
 oh-my-traex 因此保留两个层次：
 
-1. `otx run` 使用 TraeX 原生 children，适合低成本、同会话的并行探索。
+1. `otx exec` 使用 TraeX 原生 children，适合低成本、同会话的并行探索；`otx run` 保留为兼容别名。
 2. `otx team` 启动独立 TraeX 进程；每个一级 worker 拥有自己的 tmux pane、session、branch 和 worktree。
 3. Team worker 仍可在内部使用原生 TraeX children，形成“持久一级 worker + 轻量二级子 Agent”的结构。
 4. Leader 负责拆分、所有权、验证和最终集成，不把共享分支写权限交给 worker。
 
 ## 为什么不只用原生 children？
 
-| 能力 | `otx run` | `otx team` |
+| 能力 | `otx exec` | `otx team` |
 |---|---|---|
 | 运行单元 | TraeX 原生 child thread | 独立 TraeX 进程与 session |
 | 可见性 | TraeX session / 可选 tmux viewer | 每个 worker 独立 tmux pane + Web Dashboard |
@@ -77,7 +77,7 @@ oh-my-traex 因此保留两个层次：
 | 恢复与诊断 | TraeX 原生能力 | pane、PID、heartbeat、activity、task、mailbox、Git 状态 |
 | 最适合 | 探索、评审、小型并行任务 | 长任务、并行实现、可恢复交付 |
 
-两者不是替代关系。`otx run` 保持轻，`otx team` 提供 `oh-my-codex` 风格的耐久编排。
+两者不是替代关系。`otx exec` 保持轻，`otx team` 提供 `oh-my-codex` 风格的耐久编排。
 
 ## 实时 Dashboard
 
@@ -142,8 +142,9 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 
 | 命令 | 用途 |
 |---|---|
-| `otx run <task>` | 启动使用原生 children 的 TraeX leader |
-| `otx run --ui dashboard <task>` | 启动 TraeX app-server/session viewer 组合 |
+| `otx exec <task>` | 启动使用原生 children 的 TraeX leader |
+| `otx exec --ui dashboard <task>` | 启动 TraeX app-server/session viewer 组合 |
+| `otx run <task>` | `otx exec` 的兼容别名 |
 | `otx prompt <task>` | 输出 leader orchestration prompt |
 | `otx team [N:role] <task>` | 启动独立持久化 Team workers |
 | `otx team [N:role] --headless <task>` | 使用无 UI 的进程 backend 启动 Team，适用于 CI/容器 |

@@ -15,7 +15,7 @@ A TraeX-native orchestration layer inspired by `oh-my-codex`: keep lightweight n
 
 </div>
 
-> **Current status:** `main` ships two execution paths: native child-agent orchestration through `otx run`, and durable independent workers through `otx team`. The Team runtime includes structured planning, task DAGs, claim leases, durable mailboxes, dynamic membership, safe integration, and cleanup. A local REST/SSE Dashboard exposes the same runtime state as a focused control plane.
+> **Current status:** `main` ships two execution paths: native child-agent orchestration through `otx exec`, and durable independent workers through `otx team`. The Team runtime includes structured planning, task DAGs, claim leases, durable mailboxes, dynamic membership, safe integration, and cleanup. A local REST/SSE Dashboard exposes the same runtime state as a focused control plane.
 
 ## System architecture
 
@@ -37,7 +37,7 @@ otx doctor
 Start lightweight native-child orchestration:
 
 ```bash
-otx run -n 3 --mode balanced "Review this repository and implement the approved fixes"
+otx exec -n 3 --mode balanced "Review this repository and implement the approved fixes"
 ```
 
 Start a durable Team from inside tmux:
@@ -59,14 +59,14 @@ TraeX already provides native child agents. Complex engineering work still needs
 
 oh-my-traex therefore keeps two levels:
 
-1. `otx run` uses native TraeX children for low-overhead, in-session fan-out.
+1. `otx exec` uses native TraeX children for low-overhead, in-session fan-out; `otx run` remains a compatibility alias.
 2. `otx team` starts independent TraeX processes; every first-level worker receives its own tmux pane, session, branch, and worktree.
 3. A Team worker may still use native TraeX children internally, producing durable first-level workers with lightweight nested agents.
 4. The leader owns decomposition, file ownership, verification, and final integration.
 
 ## Why not use only native children?
 
-| Capability | `otx run` | `otx team` |
+| Capability | `otx exec` | `otx team` |
 |---|---|---|
 | Execution unit | Native TraeX child thread | Independent TraeX process and session |
 | Visibility | TraeX session / optional tmux viewer | One tmux pane per worker plus Web Dashboard |
@@ -77,7 +77,7 @@ oh-my-traex therefore keeps two levels:
 | Recovery | Native TraeX behavior | Pane, PID, heartbeat, activity, task, mailbox, and Git diagnostics |
 | Best fit | Exploration, review, small parallel work | Long-running implementation and recoverable delivery |
 
-The two surfaces complement each other. `otx run` stays light; `otx team` provides the durable orchestration layer associated with `oh-my-codex`.
+The two surfaces complement each other. `otx exec` stays light; `otx team` provides the durable orchestration layer associated with `oh-my-codex`.
 
 ## Live Dashboard
 
@@ -142,8 +142,9 @@ Example state tree:
 
 | Command | Purpose |
 |---|---|
-| `otx run <task>` | Start a TraeX leader using native children |
-| `otx run --ui dashboard <task>` | Start the TraeX app-server/session viewer combination |
+| `otx exec <task>` | Start a TraeX leader using native children |
+| `otx exec --ui dashboard <task>` | Start the TraeX app-server/session viewer combination |
+| `otx run <task>` | Compatibility alias for `otx exec` |
 | `otx prompt <task>` | Print the leader orchestration prompt |
 | `otx team [N:role] <task>` | Start durable independent Team workers |
 | `otx team [N:role] --headless <task>` | Start a Team with the process backend for CI and containers |

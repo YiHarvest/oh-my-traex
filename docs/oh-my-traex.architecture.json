@@ -152,7 +152,7 @@
     {
       "dot": "cyan",
       "title": "Two execution surfaces",
-      "items": ["otx run keeps lightweight native TraeX children", "otx team owns durable independent processes and panes"]
+      "items": ["otx exec keeps lightweight native TraeX children", "otx team owns durable independent processes and panes"]
     },
     {
       "dot": "emerald",
