@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
@@ -448,6 +449,11 @@ function rescheduleFailedTasks(state, run) {
 }
 
 export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
+  return withStateLock(teamStateDir(cwd, name), 'integration',
+    () => integrateTeamLocked(cwd, name, workerNames, run));
+}
+
+function integrateTeamLocked(cwd, name, workerNames, run) {
   const state = reconcileTeam(cwd, name, run);
   if (state.config.status === 'running') throw new Error('team still has running or queued work; await completion before integration.');
   const leaderStatus = run('git', ['status', '--porcelain'], { cwd: state.config.cwd, encoding: 'utf8' });
@@ -462,6 +468,7 @@ export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
     return worker;
   });
   const results = [];
+  const pending = [];
   for (const worker of selected) {
     if (verifyIntegrationEvidence(state.config.cwd, worker, run).current) {
       results.push({ ...worker.integration, status: 'already_integrated' });
@@ -492,30 +499,51 @@ export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
       results.push(record);
       continue;
     }
-    const cherryPick = run('git', ['cherry-pick', ...sourceCommits], { cwd: state.config.cwd, encoding: 'utf8' });
-    if (cherryPick.status !== 0) {
-      run('git', ['cherry-pick', '--abort'], { cwd: state.config.cwd, encoding: 'utf8' });
-      const record = {
-        worker: worker.name,
-        commit: worker.commit,
-        source_commits: sourceCommits,
-        status: 'conflict',
-        error: String(cherryPick.stderr || cherryPick.stdout || 'cherry-pick failed').trim(),
-      };
-      updateWorkerState(state.stateDir, worker.name, { integration: record });
-      updateTeamConfig(state.stateDir, { status: 'integration_failed', integration_error: record });
-      return { ok: false, results: [...results, record] };
+    pending.push({ worker, sourceCommits });
+  }
+
+  if (pending.length > 0) {
+    const originalHead = run('git', ['rev-parse', 'HEAD'], { cwd: state.config.cwd, encoding: 'utf8' }).stdout.trim();
+    const stagingRoot = mkdtempSync(join(tmpdir(), 'otx-integration-'));
+    const stagingPath = join(stagingRoot, 'worktree');
+    try {
+      const add = run('git', ['worktree', 'add', '--detach', stagingPath, originalHead], { cwd: state.config.cwd, encoding: 'utf8' });
+      if (add.status !== 0) throw new Error(String(add.stderr || add.stdout || 'failed to create integration worktree').trim());
+      for (const { worker, sourceCommits } of pending) {
+        const cherryPick = run('git', ['cherry-pick', ...sourceCommits], { cwd: stagingPath, encoding: 'utf8' });
+        if (cherryPick.status !== 0) {
+          run('git', ['cherry-pick', '--abort'], { cwd: stagingPath, encoding: 'utf8' });
+          const record = {
+            worker: worker.name, commit: worker.commit, source_commits: sourceCommits, status: 'conflict',
+            error: String(cherryPick.stderr || cherryPick.stdout || 'cherry-pick failed').trim(),
+          };
+          updateWorkerState(state.stateDir, worker.name, { integration: record });
+          updateTeamConfig(state.stateDir, { status: 'integration_failed', integration_error: record });
+          return {
+            ok: false,
+            results: [...results.map((entry) => entry.status === 'staged' ? { ...entry, status: 'rolled_back' } : entry), record],
+            rolled_back: true,
+          };
+        }
+        results.push({ worker: worker.name, commit: worker.commit, source_commits: sourceCommits, status: 'staged' });
+      }
+      const stagedHead = run('git', ['rev-parse', 'HEAD'], { cwd: stagingPath, encoding: 'utf8' }).stdout.trim();
+      const currentHead = run('git', ['rev-parse', 'HEAD'], { cwd: state.config.cwd, encoding: 'utf8' }).stdout.trim();
+      const currentStatus = run('git', ['status', '--porcelain'], { cwd: state.config.cwd, encoding: 'utf8' });
+      if (currentHead !== originalHead || currentStatus.status !== 0 || currentStatus.stdout.trim()) {
+        throw new Error('leader workspace changed during integration; staged result was not published.');
+      }
+      const publish = run('git', ['merge', '--ff-only', stagedHead], { cwd: state.config.cwd, encoding: 'utf8' });
+      if (publish.status !== 0) throw new Error(String(publish.stderr || publish.stdout || 'failed to publish integration').trim());
+      for (const result of results.filter((entry) => entry.status === 'staged')) {
+        result.status = 'integrated';
+        result.integrated_commit = stagedHead;
+        updateWorkerState(state.stateDir, result.worker, { integration: result });
+      }
+    } finally {
+      run('git', ['worktree', 'remove', '--force', stagingPath], { cwd: state.config.cwd, encoding: 'utf8' });
+      rmSync(stagingRoot, { recursive: true, force: true });
     }
-    const integratedHead = run('git', ['rev-parse', 'HEAD'], { cwd: state.config.cwd, encoding: 'utf8' });
-    const record = {
-      worker: worker.name,
-      commit: worker.commit,
-      source_commits: sourceCommits,
-      integrated_commit: integratedHead.stdout.trim(),
-      status: 'integrated',
-    };
-    updateWorkerState(state.stateDir, worker.name, { integration: record });
-    results.push(record);
   }
   updateTeamConfig(state.stateDir, { status: 'integrated', integrated_at: new Date().toISOString(), integration_results: results });
   return { ok: true, results };
