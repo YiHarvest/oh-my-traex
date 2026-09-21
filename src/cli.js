@@ -12,6 +12,7 @@ import { readTaskInput } from './stdin.js';
 import { scheduleDashboardPrompt, startDashboardRuntime, startDashboardUi, stopDashboardRuntime } from './dashboard.js';
 import { runTeamCommand } from './team/cli.js';
 import { detectTraeCliCapabilities, missingTraeCliCapabilities, permissionArgs, TRAE_PLANNER_SANDBOX, TRAE_WORKER_SANDBOX } from './team/trae.js';
+import { renderExecOptionHelp } from './exec-options.js';
 
 const HELP = `oh-my-traex (otx) - TraeX-native multi-agent orchestration
 
@@ -41,27 +42,7 @@ Usage:
   otx doctor [--live] [-C directory] [-m model]
 
 Options:
-  -n, --workers <1-6>       Maximum active child agents (default: 4)
-      --mode <mode>         conservative | balanced | aggressive
-  -m, --model <model>       Forward a model selection to TraeX
-  -C, --cwd <directory>     Workspace for the TraeX run
-      --read-only           Run the lead with a read-only sandbox
-      --ui <none|dashboard> Open a TraeX dashboard in a sibling tmux pane
-      --json                Ask TraeX exec for JSONL events
-  -p, --profile <profile>   Forward a TraeX configuration profile
-  -i, --image <file>        Attach an image (repeatable)
-      --add-dir <directory> Add a writable directory (repeatable)
-      --ephemeral           Do not persist the TraeX session
-  -o, --output-last-message <file>  Save the final response
-      --output-schema <file>        Require a JSON response schema
-      --color <mode>        always | never | auto
-      --allowed-tool <tool> Allow a tool (repeatable)
-      --disallowed-tool <tool> Disallow a tool (repeatable)
-      --shell-tool-timeout <duration>  Set the shell command timeout
-      --enable|--disable <feature>    Override a TraeX feature
-      --oss [--local-provider <provider>]  Use an OSS provider
-      --dry-run             Print the TraeX command and prompt without running
-  -h, --help                Show this help
+${renderExecOptionHelp('exec')}
 
 Examples:
   otx exec "Implement login rate limiting and tests"
@@ -79,20 +60,7 @@ Usage:
   otx exec resume --last -          Read the follow-up from stdin
 
 Options:
-      --last                Resume the most recent session
-      --all                 Disable current-directory filtering with --last
-  -m, --model <model>       Forward a model selection to TraeX
-  -C, --cwd <directory>     Workspace used to select and resume the session
-      --json                Print TraeX events as JSONL
-  -i, --image <file>        Attach an image (repeatable)
-      --ephemeral           Do not persist additional session data
-  -o, --output-last-message <file>  Save the final response
-      --allowed-tool <tool>         Allow a tool (repeatable)
-      --disallowed-tool <tool>      Disallow a tool (repeatable)
-      --shell-tool-timeout <duration>  Set the shell command timeout
-      --enable|--disable <feature>     Override a TraeX feature
-      --dry-run             Print the TraeX command without running
-  -h, --help                Show this help`;
+${renderExecOptionHelp('resume')}`;
 
 const REVIEW_HELP = `oh-my-traex (otx) - run a native TraeX code review
 
@@ -104,21 +72,7 @@ Usage:
   otx exec review [options] -       Read custom instructions from stdin
 
 Options:
-      --uncommitted         Review staged, unstaged, and untracked changes
-      --base <branch>       Review changes against a base branch
-      --commit <sha>        Review the changes introduced by one commit
-      --title <title>       Set the commit title displayed in the summary
-  -m, --model <model>       Forward a model selection to TraeX
-  -C, --cwd <directory>     Repository to review
-      --json                Print TraeX events as JSONL
-      --ephemeral           Do not persist the review session
-  -o, --output-last-message <file>  Save the final review
-      --allowed-tool <tool>         Allow a tool (repeatable)
-      --disallowed-tool <tool>      Disallow a tool (repeatable)
-      --shell-tool-timeout <duration>  Set the shell command timeout
-      --enable|--disable <feature>     Override a TraeX feature
-      --dry-run             Print the TraeX command without running
-  -h, --help                Show this help`;
+${renderExecOptionHelp('review')}`;
 
 export async function main(argv = process.argv.slice(2)) {
   try {
