@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-const requestedTag = process.argv[2] || process.env.GITHUB_REF_NAME || '';
+const requestedTag = process.argv[2]
+  || (process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : '');
 
 assert.match(pkg.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, 'package version must be valid semver');
 assert.equal(pkg.publishConfig?.access, 'public', 'release package must be public');
