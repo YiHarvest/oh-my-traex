@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -461,6 +461,50 @@ test('a later lock acquisition removes candidates left by dead processes', () =>
     assert.equal(entered, true);
     assert.equal(existsSync(candidate), false);
     assert.equal(existsSync(incompleteCandidate), false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('reclaims a stale lock when the PID was reused by another process', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-lock-pid-reuse-'));
+  try {
+    const stateDir = join(cwd, 'state');
+    const lockPath = join(stateDir, '.locks', 'shared.lock');
+    mkdirSync(lockPath, { recursive: true });
+    writeJsonAtomic(join(lockPath, 'owner.json'), {
+      schema_version: 1, token: 'stale-owner', pid: process.pid,
+      process_identity: 'old-process-birth', acquired_at: new Date(0).toISOString(),
+    });
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lockPath, old, old);
+
+    let entered = false;
+    withStateLock(stateDir, 'shared', () => { entered = true; }, {
+      readProcessIdentity: () => 'current-process-birth',
+    });
+    assert.equal(entered, true);
+    assert.equal(existsSync(lockPath), false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('removes a stale candidate when its PID birth identity changed', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-lock-candidate-pid-reuse-'));
+  try {
+    const stateDir = join(cwd, 'state');
+    const candidate = join(stateDir, '.locks', `shared.lock.candidate.${process.pid}.reused`);
+    mkdirSync(candidate, { recursive: true });
+    writeJsonAtomic(join(candidate, 'owner.json'), {
+      schema_version: 1, token: 'reused', pid: process.pid,
+      process_identity: 'old-process-birth', acquired_at: new Date(0).toISOString(),
+    });
+
+    withStateLock(stateDir, 'shared', () => {}, {
+      readProcessIdentity: () => 'current-process-birth',
+    });
+    assert.equal(existsSync(candidate), false);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
