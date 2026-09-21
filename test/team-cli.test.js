@@ -130,6 +130,18 @@ test('parses team metrics command', () => {
   assert.equal(parsed.options.json, true);
 });
 
+test('parses team HUD modes', () => {
+  const watch = parseTeamArgs(['hud', 'auth-team', '--watch', '--interval-ms', '500', '-C', '/repo']);
+  assert.equal(watch.subcommand, 'hud');
+  assert.equal(watch.options.watch, true);
+  assert.equal(watch.options.intervalMs, 500);
+  const tmux = parseTeamArgs(['hud', 'auth-team', '--tmux']);
+  assert.equal(tmux.options.tmux, true);
+  assert.throws(() => parseTeamArgs(['hud', 'auth-team', '--watch', '--tmux']), /cannot be combined/);
+  assert.throws(() => parseTeamArgs(['hud', 'auth-team', '--interval-ms', '100']), /at least 250/);
+  assert.throws(() => parseTeamArgs(['hud', 'auth-team', '--json', '--watch']), /cannot be combined/);
+});
+
 test('parses team cleanup command', () => {
   const parsed = parseTeamArgs(['cleanup', 'auth-team', '-C', '/repo']);
   assert.equal(parsed.name, 'auth-team');

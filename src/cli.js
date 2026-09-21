@@ -33,6 +33,7 @@ Usage:
   otx team tasks <team-name>
   otx team assign <team-name> <worker> "task"
   otx team diagnose <team-name>
+  otx team hud <team-name> [--watch|--tmux]
   otx team add-worker <team-name> <role> "assignment"
   otx team remove-worker <team-name> <worker>
   otx team integrate <team-name> [worker ...]
