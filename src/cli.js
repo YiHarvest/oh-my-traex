@@ -18,6 +18,8 @@ const HELP = `oh-my-traex (otx) - TraeX-native multi-agent orchestration
 Usage:
   otx exec [options] "task"
   otx exec [options] -            Read the task from stdin
+  otx exec resume --last [options] ["follow-up"]
+  otx exec resume <session> [options] ["follow-up"]
   otx run [options] "task"       Alias for otx exec
   otx prompt [options] "task"
   otx team [N:role] [options] "task"
@@ -62,14 +64,39 @@ Examples:
   otx exec "Implement login rate limiting and tests"
   otx exec -n 3 --mode conservative "Review this repository for security issues"
   echo "Review this repository" | otx exec
+  otx exec resume --last "Run the remaining tests"
   otx prompt "Refactor the parser without changing behavior"`;
+
+const RESUME_HELP = `oh-my-traex (otx) - resume a TraeX exec session
+
+Usage:
+  otx exec resume --last [options] ["follow-up"]
+  otx exec resume <session-id> [options] ["follow-up"]
+  otx exec resume --last -          Read the follow-up from stdin
+
+Options:
+      --last                Resume the most recent session
+      --all                 Disable current-directory filtering with --last
+  -m, --model <model>       Forward a model selection to TraeX
+  -C, --cwd <directory>     Workspace used to select and resume the session
+      --json                Print TraeX events as JSONL
+  -i, --image <file>        Attach an image (repeatable)
+      --ephemeral           Do not persist additional session data
+  -o, --output-last-message <file>  Save the final response
+      --allowed-tool <tool>         Allow a tool (repeatable)
+      --disallowed-tool <tool>      Disallow a tool (repeatable)
+      --shell-tool-timeout <duration>  Set the shell command timeout
+      --enable|--disable <feature>     Override a TraeX feature
+      --dry-run             Print the TraeX command without running
+  -h, --help                Show this help`;
 
 export async function main(argv = process.argv.slice(2)) {
   try {
     if (argv[0] === 'team') return await runTeamCommand(argv.slice(1));
     if (argv[0] === 'dashboard') return runLiveDashboard(argv.slice(1));
     if (argv[0] === 'doctor') return doctor(argv.slice(1));
-    const { command, task: argvTask, stdinTask, options } = parseArgs(argv);
+    const { command, sessionId, task: argvTask, stdinTask, options } = parseArgs(argv);
+    if (command === 'resume') return runExecResume({ sessionId, argvTask, stdinTask, options });
     if (options.help || command === 'help') return print(HELP);
     if (command === 'roles') return print(roleCatalog());
     if (!['exec', 'prompt'].includes(command)) throw new Error(`Unknown command: ${command}`);
@@ -132,6 +159,34 @@ export async function main(argv = process.argv.slice(2)) {
     process.stderr.write(`otx: ${error.message}\n`);
     return 1;
   }
+}
+
+function runExecResume({ sessionId, argvTask, stdinTask, options }) {
+  if (options.help) return print(RESUME_HELP);
+  const prompt = readTaskInput(argvTask, { stdinTask });
+  const cwd = resolve(options.cwd);
+  accessSync(cwd, constants.R_OK);
+  const traeArgs = ['exec', 'resume', '--skip-git-repo-check', ...permissionArgs()];
+  if (options.last) traeArgs.push('--last');
+  if (options.all) traeArgs.push('--all');
+  if (options.model) traeArgs.push('--model', options.model);
+  if (options.json) traeArgs.push('--json');
+  traeArgs.push(...options.passthrough);
+  if (sessionId) traeArgs.push(sessionId);
+  if (prompt) traeArgs.push(prompt);
+
+  if (options.dryRun) {
+    const rendered = prompt
+      ? [...traeArgs.slice(0, -1), '<follow-up>']
+      : traeArgs;
+    print(`traex ${rendered.map(shellQuote).join(' ')}`);
+    if (prompt) print('\n' + prompt);
+    return 0;
+  }
+
+  const result = spawnSync('traex', traeArgs, { cwd, stdio: ['ignore', 'inherit', 'inherit'] });
+  if (result.error) throw result.error;
+  return result.status ?? 1;
 }
 
 function runLiveDashboard(argv) {

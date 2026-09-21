@@ -46,6 +46,8 @@ otx exec -n 3 --mode balanced "Review this repository and implement the approved
 
 Tasks may also come from stdin: `echo "review this repository" | otx exec`, or explicitly with `otx exec - < task.md`. When both an argument task and a pipe are present, the piped content is appended once as a `<stdin>` block.
 
+Continue the latest OTX/TraeX session with `otx exec resume --last "Run the remaining tests"`. You can also pass an explicit session ID or read the follow-up from stdin with `otx exec resume --last - < follow-up.md`. Resume continues the original session without injecting the orchestration prompt again and keeps OTX's non-interactive permission contract enforced.
+
 Start a durable Team from inside tmux:
 
 ```bash
@@ -149,6 +151,8 @@ Example state tree:
 | Command | Purpose |
 |---|---|
 | `otx exec <task>` | Start a TraeX leader using native children |
+| `otx exec resume --last [follow-up]` | Continue the latest TraeX session within the same permission boundary |
+| `otx exec resume <session-id> [follow-up]` | Continue a specific TraeX session by ID |
 | `otx exec --ui dashboard <task>` | Start the TraeX app-server/session viewer combination |
 | `otx run <task>` | Compatibility alias for `otx exec` |
 | `otx prompt <task>` | Print the leader orchestration prompt |

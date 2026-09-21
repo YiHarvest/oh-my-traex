@@ -68,6 +68,48 @@ test('exec appends piped stdin to an argument task exactly once', () => {
   assert.equal(result.stdout.match(/extra context/g)?.length, 1);
 });
 
+test('exec resume dry-run preserves the session and permission contract', () => {
+  const result = spawnSync(
+    process.execPath,
+    ['src/cli.js', 'exec', 'resume', 'session-123', '--dry-run', '--json',
+      '--allowed-tool', 'shell', 'finish the tests'],
+    { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /traex exec resume --skip-git-repo-check/);
+  assert.match(result.stdout, /--permission-mode custom/);
+  assert.match(result.stdout, /approval_policy=/);
+  assert.match(result.stdout, /--json --allowed-tool shell session-123 "<follow-up>"/);
+  assert.doesNotMatch(result.stdout, /<oh_my_traex>/);
+  assert.match(result.stdout, /finish the tests/);
+});
+
+test('exec resume --last reads a follow-up from piped stdin', () => {
+  const result = spawnSync(process.execPath, ['src/cli.js', 'exec', 'resume', '--last', '--dry-run'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8', input: 'continue from stdin\n',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /traex exec resume --skip-git-repo-check .*--last "<follow-up>"/);
+  assert.equal(result.stdout.match(/continue from stdin/g)?.length, 1);
+});
+
+test('exec resume exposes focused help and rejects permission overrides', () => {
+  const help = spawnSync(process.execPath, ['src/cli.js', 'exec', 'resume', '--help'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8',
+  });
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /otx exec resume --last/);
+
+  const rejected = spawnSync(
+    process.execPath,
+    ['src/cli.js', 'exec', 'resume', '--last', '--sandbox', 'danger-full-access'],
+    { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
+  );
+  assert.equal(rejected.status, 1);
+  assert.match(rejected.stderr, /--sandbox is managed by OTX/);
+});
+
 test('dashboard dry-run reports the planned UI without requiring tmux', () => {
   const result = spawnSync(
     process.execPath,

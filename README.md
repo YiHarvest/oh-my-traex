@@ -46,6 +46,8 @@ otx exec -n 3 --mode balanced "Review this repository and implement the approved
 
 任务也可来自标准输入：`echo "review this repository" | otx exec`，或使用显式的 `otx exec - < task.md`。当命令行任务与管道同时存在时，管道内容会作为单个 `<stdin>` 补充块追加。
 
+继续最近一次 OTX/TraeX 会话时使用 `otx exec resume --last "Run the remaining tests"`；也可传入明确的 session ID，或用 `otx exec resume --last - < follow-up.md` 从标准输入读取后续指令。Resume 会直接续跑原会话，不会重复注入 orchestration prompt，并继续强制 OTX 的无提示权限契约。
+
 在 tmux 中启动持久化 Team：
 
 ```bash
@@ -149,6 +151,8 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 | 命令 | 用途 |
 |---|---|
 | `otx exec <task>` | 启动使用原生 children 的 TraeX leader |
+| `otx exec resume --last [follow-up]` | 在相同权限边界内继续最近的 TraeX session |
+| `otx exec resume <session-id> [follow-up]` | 按 ID 继续指定的 TraeX session |
 | `otx exec --ui dashboard <task>` | 启动 TraeX app-server/session viewer 组合 |
 | `otx run <task>` | `otx exec` 的兼容别名 |
 | `otx prompt <task>` | 输出 leader orchestration prompt |
