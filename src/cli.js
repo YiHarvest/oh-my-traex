@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from './args.js';
 import { buildOrchestratorPrompt } from './prompt.js';
 import { roleCatalog } from './roles.js';
+import { parseDoctorArgs, runLiveExecCheck } from './doctor.js';
 import { scheduleDashboardPrompt, startDashboardRuntime, startDashboardUi, stopDashboardRuntime } from './dashboard.js';
 import { runTeamCommand } from './team/cli.js';
 import { detectTraeCapabilities, permissionArgs, TRAE_PLANNER_SANDBOX, TRAE_WORKER_SANDBOX } from './team/trae.js';
@@ -30,7 +31,7 @@ Usage:
   otx team integrate <team-name> [worker ...]
   otx dashboard [-C repository] [--port 4173] [--poll-ms 1000]
   otx roles
-  otx doctor
+  otx doctor [--live] [-C directory] [-m model]
 
 Options:
   -n, --workers <1-6>       Maximum active child agents (default: 4)
@@ -52,10 +53,10 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     if (argv[0] === 'team') return await runTeamCommand(argv.slice(1));
     if (argv[0] === 'dashboard') return runLiveDashboard(argv.slice(1));
+    if (argv[0] === 'doctor') return doctor(argv.slice(1));
     const { command, task, options } = parseArgs(argv);
     if (options.help || command === 'help') return print(HELP);
     if (command === 'roles') return print(roleCatalog());
-    if (command === 'doctor') return doctor();
     if (!['exec', 'prompt'].includes(command)) throw new Error(`Unknown command: ${command}`);
     if (!task) throw new Error(`${command} requires a task.`);
     if (options.ui === 'dashboard' && options.json) {
@@ -123,7 +124,11 @@ function runLiveDashboard(argv) {
   return result.status ?? 1;
 }
 
-function doctor() {
+function doctor(argv = []) {
+  const options = parseDoctorArgs(argv);
+  if (options.help) {
+    return print('Usage: otx doctor [--live] [-C directory] [-m model]');
+  }
   const checks = [];
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   checks.push(['Node.js >= 22', nodeMajor >= 22, process.version]);
@@ -141,11 +146,23 @@ function doctor() {
   const featureText = `${features.stdout || ''}\n${features.stderr || ''}`;
   checks.push(['TraeX multi_agent enabled', /multi_agent\s+stable\s+true/.test(featureText), 'required']);
   checks.push(['TraeX multi_agent_v2 enabled', /multi_agent_v2\s+stable\s+true/.test(featureText), 'recommended']);
+  let capabilities;
   try {
-    const capabilities = detectTraeCapabilities();
+    capabilities = detectTraeCapabilities();
     checks.push(['TraeX exec contract', true, Object.entries(capabilities).filter(([, enabled]) => enabled).map(([name]) => name).join(', ')]);
   } catch (error) {
     checks.push(['TraeX exec contract', false, error.message]);
+  }
+
+  if (options.live) {
+    if (version.status !== 0 || !capabilities) {
+      checks.push(['TraeX live exec', false, 'skipped because static TraeX checks failed']);
+    } else {
+      const result = runLiveExecCheck({
+        cwd: options.cwd, model: options.model, ephemeral: capabilities.ephemeral,
+      });
+      checks.push(['TraeX live exec', result.ok, result.detail]);
+    }
   }
 
   for (const [name, ok, detail] of checks) print(`${ok ? 'PASS' : 'FAIL'}  ${name} (${detail})`);

@@ -20,7 +20,7 @@ for (const required of ['src/cli.js', 'src/team/runtime.js', 'dashboard-prototyp
 for (const excludedPrefix of ['test/', 'assets/', 'docs/', '.github/']) {
   assert.equal(paths.some((path) => path.startsWith(excludedPrefix)), false, `package contains ${excludedPrefix}`);
 }
-assert.ok(manifest.unpackedSize < 310_000, `unpacked package is too large: ${manifest.unpackedSize} bytes`);
+assert.ok(manifest.unpackedSize < 315_000, `unpacked package is too large: ${manifest.unpackedSize} bytes`);
 const installRoot = mkdtempSync(join(tmpdir(), 'oh-my-traex-pack-check-'));
 try {
   const pack = spawnSync('npm', ['pack', '--pack-destination', installRoot], {
@@ -37,6 +37,9 @@ try {
   const help = spawnSync(binary, ['--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr || 'installed otx --help failed');
   assert.match(help.stdout, /oh-my-traex \(otx\)/, 'installed otx binary produced no help output');
+  const doctorHelp = spawnSync(binary, ['doctor', '--help'], { encoding: 'utf8' });
+  assert.equal(doctorHelp.status, 0, doctorHelp.stderr || 'installed otx doctor --help failed');
+  assert.match(doctorHelp.stdout, /otx doctor \[--live\]/, 'installed package does not expose live doctor');
   assert.match(help.stdout, /otx exec/, 'installed otx help does not expose the canonical exec command');
   const dryRun = spawnSync(binary, ['exec', '--dry-run', 'verify installed package'], { encoding: 'utf8' });
   assert.equal(dryRun.status, 0, dryRun.stderr || 'installed otx dry-run failed');

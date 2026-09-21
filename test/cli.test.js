@@ -59,3 +59,12 @@ test('live dashboard help does not start a server', () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /otx dashboard \[-C repository\]/);
 });
+
+test('live doctor help does not start a model call', () => {
+  const result = spawnSync(process.execPath, ['src/cli.js', 'doctor', '--help'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /otx doctor [--live]/);
+});
