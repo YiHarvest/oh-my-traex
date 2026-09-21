@@ -31,6 +31,7 @@ export function detectTraeCapabilities(run = spawnSync) {
     sessionId: execHelp.includes('--session-id'),
     outputLastMessage: execHelp.includes('--output-last-message'),
     projectConfig: execHelp.includes('--config'),
+    ephemeral: execHelp.includes('--ephemeral'),
     resumeJson: resumeHelp.includes('--json'),
     resumePermissionMode: resumeHelp.includes('--permission-mode'),
     resumeOutputLastMessage: resumeHelp.includes('--output-last-message'),

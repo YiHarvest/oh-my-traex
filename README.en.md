@@ -32,6 +32,8 @@ git clone https://github.com/YiHarvest/oh-my-traex.git
 cd oh-my-traex
 npm link
 otx doctor
+# Optional: make one minimal read-only model request to verify auth and backend routing
+otx doctor --live
 ```
 
 Start lightweight native-child orchestration:
@@ -167,7 +169,8 @@ Example state tree:
 | `otx team stop <name>` | Stop a Team after verifying pane ownership |
 | `otx team cleanup <name>` | Remove stopped, safe branches and worktrees |
 | `otx dashboard [-C repo]` | Start the repository-scoped Live Team Dashboard |
-| `otx doctor` | Check Node, TraeX, Git, tmux, and multi-agent features |
+| `otx doctor` | Statically check Node, TraeX, Git, tmux, and multi-agent features |
+| `otx doctor --live [-C repo] [-m model]` | Make a minimal read-only request to verify TraeX auth, model, and backend routing |
 
 Mailbox delivery uses one-time receipt tokens so concurrent consumers cannot process the same message twice. `reconcile` automatically reschedules a failed worker task at most once, preferring a healthy worker with the same role and write requirement. Delivery, completion, and rescheduling transitions are recorded as atomic events for incremental consumers.
 

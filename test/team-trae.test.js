@@ -13,11 +13,11 @@ test('detects the required TraeX runtime capabilities', () => {
   const run = (_command, args) => args[0] === 'exec' && args[1] === 'resume'
     ? { status: 0, stdout: '--json --permission-mode --output-last-message --config', stderr: '' }
     : args[0] === 'exec'
-      ? { status: 0, stdout: 'Commands: resume\n--json --sandbox --permission-mode --session-id --output-last-message --config', stderr: '' }
+      ? { status: 0, stdout: 'Commands: resume\n--json --sandbox --permission-mode --session-id --output-last-message --config --ephemeral', stderr: '' }
     : { status: 0, stdout: 'Commands: app-server\n--remote-auth-token-env', stderr: '' };
   assert.deepEqual(detectTraeCapabilities(run), {
     json: true, resume: true, sandbox: true, permissionMode: true, sessionId: true,
-    outputLastMessage: true, projectConfig: true, resumeJson: true, resumePermissionMode: true,
+    outputLastMessage: true, projectConfig: true, ephemeral: true, resumeJson: true, resumePermissionMode: true,
     resumeOutputLastMessage: true, resumeProjectConfig: true, appServer: true, remoteAuthToken: true,
   });
 });
