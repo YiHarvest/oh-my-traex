@@ -42,6 +42,8 @@ Start lightweight native-child orchestration:
 otx exec -n 3 --mode balanced "Review this repository and implement the approved fixes"
 ```
 
+`otx exec` forwards common native TraeX options such as `--profile`, `--image`, `--add-dir`, `--ephemeral`, `--output-schema`, `--output-last-message`, tool allow/deny lists, and the shell timeout. OTX rejects passthrough `--permission-mode`, `--sandbox`, `-c`, and bypass flags so callers cannot bypass its shared headless permission contract.
+
 Start a durable Team from inside tmux:
 
 ```bash

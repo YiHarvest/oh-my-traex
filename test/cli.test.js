@@ -29,6 +29,28 @@ test('run remains a compatibility alias for exec', () => {
   assert.match(result.stdout, /traex exec --skip-git-repo-check/);
 });
 
+test('dry-run forwards safe native TraeX options after managed arguments', () => {
+  const result = spawnSync(
+    process.execPath,
+    ['src/cli.js', 'exec', '--dry-run', '--profile', 'work', '--ephemeral',
+      '--allowed-tool', 'shell', '--output-last-message', 'result.txt', 'audit the API'],
+    { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /--profile work --ephemeral --allowed-tool shell --output-last-message result.txt/);
+});
+
+test('exec rejects native permission overrides managed by OTX', () => {
+  const result = spawnSync(
+    process.execPath,
+    ['src/cli.js', 'exec', '--permission-mode', 'bypass_permissions', 'audit the API'],
+    { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /--permission-mode is managed by OTX/);
+});
+
 test('dashboard dry-run reports the planned UI without requiring tmux', () => {
   const result = spawnSync(
     process.execPath,
@@ -49,6 +71,16 @@ test('dashboard mode rejects JSON exec output', () => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /--json cannot be used with --ui dashboard/);
+});
+
+test('dashboard mode rejects native exec passthrough options', () => {
+  const result = spawnSync(
+    process.execPath,
+    ['src/cli.js', 'exec', '--ui', 'dashboard', '--ephemeral', 'audit the API'],
+    { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /native TraeX exec options cannot be used with --ui dashboard/);
 });
 
 test('live dashboard help does not start a server', () => {

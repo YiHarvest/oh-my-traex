@@ -1,4 +1,23 @@
 const MODES = new Set(['conservative', 'balanced', 'aggressive']);
+const TRAE_VALUE_OPTIONS = new Map([
+  ['--profile', '--profile'], ['-p', '--profile'],
+  ['--image', '--image'], ['-i', '--image'],
+  ['--add-dir', '--add-dir'],
+  ['--output-schema', '--output-schema'],
+  ['--output-last-message', '--output-last-message'], ['-o', '--output-last-message'],
+  ['--color', '--color'],
+  ['--allowed-tool', '--allowed-tool'],
+  ['--disallowed-tool', '--disallowed-tool'],
+  ['--shell-tool-timeout', '--shell-tool-timeout'],
+  ['--enable', '--enable'], ['--disable', '--disable'],
+  ['--local-provider', '--local-provider'],
+]);
+const TRAE_BOOLEAN_OPTIONS = new Set(['--ephemeral', '--oss']);
+const OTX_MANAGED_OPTIONS = new Set([
+  '--permission-mode', '--sandbox', '-s', '--dangerously-bypass-approvals-and-sandbox',
+  '-y', '--dangerously-bypass-hook-trust', '--ignore-user-config', '--ignore-rules',
+  '--config', '-c', '--session-id', '--cd',
+]);
 
 export function parseArgs(argv) {
   const args = [...argv];
@@ -25,6 +44,18 @@ export function parseArgs(argv) {
     else if (arg === '--ui') options.ui = requireValue(args, ++index, arg);
     else if (arg.startsWith('--ui=')) options.ui = arg.slice(5);
     else if (arg === '--help' || arg === '-h') options.help = true;
+    else if (TRAE_BOOLEAN_OPTIONS.has(arg)) options.passthrough.push(arg);
+    else if (TRAE_VALUE_OPTIONS.has(arg)) {
+      options.passthrough.push(TRAE_VALUE_OPTIONS.get(arg), requireValue(args, ++index, arg));
+    }
+    else if (arg.startsWith('--') && TRAE_VALUE_OPTIONS.has(arg.split('=', 1)[0]) && arg.includes('=')) {
+      const [flag, value] = arg.split(/=(.*)/s, 2);
+      if (!value) throw new Error(`${flag} requires a value.`);
+      options.passthrough.push(TRAE_VALUE_OPTIONS.get(flag), value);
+    }
+    else if (OTX_MANAGED_OPTIONS.has(arg) || [...OTX_MANAGED_OPTIONS].some((flag) => arg.startsWith(`${flag}=`))) {
+      throw new Error(`${arg.split('=', 1)[0]} is managed by OTX and cannot be overridden.`);
+    }
     else if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}`);
     else taskParts.push(arg);
   }
