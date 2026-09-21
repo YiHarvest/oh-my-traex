@@ -65,3 +65,9 @@ test('rejects native options that would override the OTX execution boundary', ()
     assert.throws(() => parseArgs(['exec', ...args, 'task']), /managed by OTX/);
   }
 });
+
+test('recognizes explicit stdin task input', () => {
+  const parsed = parseArgs(['exec', '-']);
+  assert.equal(parsed.stdinTask, true);
+  assert.equal(parsed.task, '');
+});

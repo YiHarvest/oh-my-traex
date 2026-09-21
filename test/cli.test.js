@@ -51,6 +51,23 @@ test('exec rejects native permission overrides managed by OTX', () => {
   assert.match(result.stderr, /--permission-mode is managed by OTX/);
 });
 
+test('exec dry-run reads a task from piped stdin', () => {
+  const result = spawnSync(process.execPath, ['src/cli.js', 'exec', '--dry-run'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8', input: 'audit from stdin\n',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /audit from stdin/);
+});
+
+test('exec appends piped stdin to an argument task exactly once', () => {
+  const result = spawnSync(process.execPath, ['src/cli.js', 'exec', '--dry-run', 'base task'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8', input: 'extra context\n',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /base task[\s\S]*<stdin>[\s\S]*extra context[\s\S]*<\/stdin>/);
+  assert.equal(result.stdout.match(/extra context/g)?.length, 1);
+});
+
 test('dashboard dry-run reports the planned UI without requiring tmux', () => {
   const result = spawnSync(
     process.execPath,

@@ -44,6 +44,8 @@ otx exec -n 3 --mode balanced "Review this repository and implement the approved
 
 `otx exec` forwards common native TraeX options such as `--profile`, `--image`, `--add-dir`, `--ephemeral`, `--output-schema`, `--output-last-message`, tool allow/deny lists, and the shell timeout. OTX rejects passthrough `--permission-mode`, `--sandbox`, `-c`, and bypass flags so callers cannot bypass its shared headless permission contract.
 
+Tasks may also come from stdin: `echo "review this repository" | otx exec`, or explicitly with `otx exec - < task.md`. When both an argument task and a pipe are present, the piped content is appended once as a `<stdin>` block.
+
 Start a durable Team from inside tmux:
 
 ```bash

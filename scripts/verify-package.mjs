@@ -20,7 +20,7 @@ for (const required of ['src/cli.js', 'src/team/runtime.js', 'dashboard-prototyp
 for (const excludedPrefix of ['test/', 'assets/', 'docs/', '.github/']) {
   assert.equal(paths.some((path) => path.startsWith(excludedPrefix)), false, `package contains ${excludedPrefix}`);
 }
-assert.ok(manifest.unpackedSize < 315_000, `unpacked package is too large: ${manifest.unpackedSize} bytes`);
+assert.ok(manifest.unpackedSize < 320_000, `unpacked package is too large: ${manifest.unpackedSize} bytes`);
 const installRoot = mkdtempSync(join(tmpdir(), 'oh-my-traex-pack-check-'));
 try {
   const pack = spawnSync('npm', ['pack', '--pack-destination', installRoot], {
@@ -47,6 +47,9 @@ try {
   assert.equal(dryRun.status, 0, dryRun.stderr || 'installed otx dry-run failed');
   assert.match(dryRun.stdout, /traex exec/, 'installed otx binary did not execute main');
   assert.match(dryRun.stdout, /--ephemeral --allowed-tool shell/, 'installed otx binary did not forward native exec options');
+  const piped = spawnSync(binary, ['exec', '--dry-run'], { encoding: 'utf8', input: 'verify piped package input' });
+  assert.equal(piped.status, 0, piped.stderr || 'installed otx piped dry-run failed');
+  assert.match(piped.stdout, /verify piped package input/, 'installed otx binary did not read stdin task input');
 } finally {
   rmSync(installRoot, { recursive: true, force: true });
 }

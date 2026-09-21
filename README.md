@@ -44,6 +44,8 @@ otx exec -n 3 --mode balanced "Review this repository and implement the approved
 
 `otx exec` 可透传常用的 TraeX 原生参数，例如 `--profile`、`--image`、`--add-dir`、`--ephemeral`、`--output-schema`、`--output-last-message`、工具白/黑名单和 shell timeout。OTX 会拒绝透传 `--permission-mode`、`--sandbox`、`-c` 及 bypass 参数，避免绕过统一的 headless 权限契约。
 
+任务也可来自标准输入：`echo "review this repository" | otx exec`，或使用显式的 `otx exec - < task.md`。当命令行任务与管道同时存在时，管道内容会作为单个 `<stdin>` 补充块追加。
+
 在 tmux 中启动持久化 Team：
 
 ```bash
