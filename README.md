@@ -173,7 +173,7 @@ Mailbox 投递使用一次性 receipt token，避免并发 worker 重复消费�
 
 ## 安全边界
 
-- worker 与 leader 显式使用 TraeX `permission-mode=default` + `workspace-write`；planner 使用 `permission-mode=default` + `read-only`；follow-up resume 也显式保持 `permission-mode=default`，不会继承为 bypass-permissions。
+- 非交互 worker 与 leader 显式使用 TraeX `permission-mode=custom` + `approval_policy=never` + `workspace-write`；planner 使用同一无提示审批策略和 `read-only`；follow-up resume 也显式保持 `custom + never`，不会继承为 bypass-permissions。
 - Dashboard 只绑定 loopback，不开放任意 shell endpoint。
 - Worktree 信任仅通过 worker 进程级配置覆盖，不写入用户全局信任列表。
 - 所有 pane kill 都校验 team、worker、run ID 与原始 pane PID。

@@ -35,11 +35,15 @@ test('reports the exact missing initial and resume capabilities', () => {
 test('builds version-adapted initial and resume worker commands', () => {
   const input = { worktreePath: '/tmp/work tree', sessionId: 'session', resultPath: '/tmp/result', model: 'model', prompt: 'do work' };
   assert.deepEqual(buildWorkerExecArgs(input).slice(0, 5), ['exec', '--json', '--skip-git-repo-check', '-C', '/tmp/work tree']);
-  assert.deepEqual(permissionArgs('workspace-write'), ['--permission-mode', 'default', '--sandbox', 'workspace-write']);
+  assert.deepEqual(permissionArgs('workspace-write'), [
+    '--permission-mode', 'custom', '-c', 'approval_policy="never"', '--sandbox', 'workspace-write',
+  ]);
   assert.ok(buildWorkerExecArgs(input).includes('--permission-mode'));
   assert.deepEqual(buildWorkerExecArgs(input).slice(-3), ['--model', 'model', 'do work']);
   assert.deepEqual(buildWorkerResumeArgs(input).slice(0, 3), ['exec', 'resume', '--json']);
-  assert.deepEqual(buildWorkerResumeArgs(input).slice(5, 7), ['--permission-mode', 'default']);
+  assert.deepEqual(buildWorkerResumeArgs(input).slice(5, 9), [
+    '--permission-mode', 'custom', '-c', 'approval_policy="never"',
+  ]);
   assert.equal(buildWorkerResumeArgs(input).includes('--sandbox'), false);
   assert.deepEqual(buildWorkerResumeArgs(input).slice(-2), ['session', 'do work']);
 });

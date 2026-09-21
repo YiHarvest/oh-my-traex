@@ -137,10 +137,11 @@ test('resume publishes running only after TraeX actually spawns', async () => {
     });
     assert.equal(readTeamState(cwd, 'demo').config.status, 'resuming');
     assert.equal((await resumed).status, 0);
-    assert.deepEqual(spawnedArgs.slice(0, 7), [
-      'resume', '--no-alt-screen', '-C', cwd, '--permission-mode', 'default', '--sandbox',
+    assert.deepEqual(spawnedArgs.slice(0, 9), [
+      'resume', '--no-alt-screen', '-C', cwd, '--permission-mode', 'custom',
+      '-c', 'approval_policy="never"', '--sandbox',
     ]);
-    assert.equal(spawnedArgs[7], 'workspace-write');
+    assert.equal(spawnedArgs[9], 'workspace-write');
     const config = readTeamState(cwd, 'demo').config;
     assert.equal(config.status, 'running');
     assert.ok(config.resumed_at);

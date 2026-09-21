@@ -173,7 +173,7 @@ Mailbox delivery uses one-time receipt tokens so concurrent consumers cannot pro
 
 ## Safety boundaries
 
-- Workers and the leader explicitly use TraeX `permission-mode=default` with `workspace-write`; the planner uses `permission-mode=default` with `read-only`; follow-up resumes also retain `permission-mode=default` instead of inheriting bypass permissions.
+- Non-interactive workers and leaders explicitly use TraeX `permission-mode=custom` with `approval_policy=never` and `workspace-write`; the planner uses the same prompt-free approval policy with `read-only`; follow-up resumes also retain `custom + never` instead of inheriting bypass permissions.
 - The Dashboard is loopback-only and exposes no arbitrary shell endpoint.
 - Worktree trust is injected only into the worker process and does not update the user's global trust list.
 - Pane termination validates team, worker, run ID, and original pane PID.

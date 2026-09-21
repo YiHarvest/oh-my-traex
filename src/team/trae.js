@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
-export const TRAE_PERMISSION_MODE = 'default';
+export const TRAE_PERMISSION_MODE = 'custom';
+export const TRAE_APPROVAL_POLICY = 'never';
 export const TRAE_WORKER_SANDBOX = 'workspace-write';
 export const TRAE_PLANNER_SANDBOX = 'read-only';
 export const REQUIRED_TRAE_CAPABILITIES = Object.freeze([
@@ -43,7 +44,10 @@ export function detectTraeCapabilities(run = spawnSync) {
 }
 
 export function permissionArgs(sandbox) {
-  const args = ['--permission-mode', TRAE_PERMISSION_MODE];
+  const args = [
+    '--permission-mode', TRAE_PERMISSION_MODE,
+    '-c', `approval_policy="${TRAE_APPROVAL_POLICY}"`,
+  ];
   if (sandbox) args.push('--sandbox', sandbox);
   return args;
 }
