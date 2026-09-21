@@ -13,6 +13,15 @@ const TRAE_VALUE_OPTIONS = new Map([
   ['--local-provider', '--local-provider'],
 ]);
 const TRAE_BOOLEAN_OPTIONS = new Set(['--ephemeral', '--oss']);
+const TRAE_RESUME_VALUE_OPTIONS = new Map([
+  ['--image', '--image'], ['-i', '--image'],
+  ['--output-last-message', '--output-last-message'], ['-o', '--output-last-message'],
+  ['--allowed-tool', '--allowed-tool'],
+  ['--disallowed-tool', '--disallowed-tool'],
+  ['--shell-tool-timeout', '--shell-tool-timeout'],
+  ['--enable', '--enable'], ['--disable', '--disable'],
+]);
+const TRAE_RESUME_BOOLEAN_OPTIONS = new Set(['--ephemeral']);
 const OTX_MANAGED_OPTIONS = new Set([
   '--permission-mode', '--sandbox', '-s', '--dangerously-bypass-approvals-and-sandbox',
   '-y', '--dangerously-bypass-hook-trust', '--ignore-user-config', '--ignore-rules',
@@ -23,6 +32,10 @@ export function parseArgs(argv) {
   const args = [...argv];
   const requestedCommand = args[0] && !args[0].startsWith('-') ? args.shift() : 'exec';
   const command = requestedCommand === 'run' ? 'exec' : requestedCommand;
+  if (command === 'exec' && args[0] === 'resume') {
+    args.shift();
+    return parseResumeArgs(args);
+  }
   const options = { workers: 4, mode: 'balanced', cwd: process.cwd(), ui: 'none', passthrough: [] };
   const taskParts = [];
   let stdinTask = false;
@@ -76,6 +89,52 @@ export function parseArgs(argv) {
   }
 
   return { command, task: taskParts.join(' ').trim(), stdinTask, options };
+}
+
+export function parseResumeArgs(argv) {
+  const args = [...argv];
+  const options = { cwd: process.cwd(), passthrough: [] };
+  const positionals = [];
+  let stdinTask = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '-') {
+      stdinTask = true;
+      continue;
+    }
+    if (arg === '--') {
+      positionals.push(...args.slice(index + 1));
+      break;
+    }
+    if (arg === '--last') options.last = true;
+    else if (arg === '--all') options.all = true;
+    else if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--json') options.json = true;
+    else if (arg === '--model' || arg === '-m') options.model = requireValue(args, ++index, arg);
+    else if (arg === '--cwd' || arg === '-C') options.cwd = requireValue(args, ++index, arg);
+    else if (arg === '--help' || arg === '-h') options.help = true;
+    else if (TRAE_RESUME_BOOLEAN_OPTIONS.has(arg)) options.passthrough.push(arg);
+    else if (TRAE_RESUME_VALUE_OPTIONS.has(arg)) {
+      options.passthrough.push(TRAE_RESUME_VALUE_OPTIONS.get(arg), requireValue(args, ++index, arg));
+    }
+    else if (arg.startsWith('--') && TRAE_RESUME_VALUE_OPTIONS.has(arg.split('=', 1)[0]) && arg.includes('=')) {
+      const [flag, value] = arg.split(/=(.*)/s, 2);
+      if (!value) throw new Error(`${flag} requires a value.`);
+      options.passthrough.push(TRAE_RESUME_VALUE_OPTIONS.get(flag), value);
+    }
+    else if (OTX_MANAGED_OPTIONS.has(arg) || [...OTX_MANAGED_OPTIONS].some((flag) => arg.startsWith(`${flag}=`))) {
+      throw new Error(`${arg.split('=', 1)[0]} is managed by OTX and cannot be overridden.`);
+    }
+    else if (arg.startsWith('-')) throw new Error(`Unknown resume option: ${arg}`);
+    else positionals.push(arg);
+  }
+
+  const sessionId = options.last ? undefined : positionals.shift();
+  if (!options.help && !options.last && !sessionId) {
+    throw new Error('exec resume requires a session ID or --last.');
+  }
+  return { command: 'resume', sessionId, task: positionals.join(' ').trim(), stdinTask, options };
 }
 
 function requireValue(args, index, flag) {

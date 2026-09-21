@@ -20,7 +20,7 @@ for (const required of ['src/cli.js', 'src/team/runtime.js', 'dashboard-prototyp
 for (const excludedPrefix of ['test/', 'assets/', 'docs/', '.github/']) {
   assert.equal(paths.some((path) => path.startsWith(excludedPrefix)), false, `package contains ${excludedPrefix}`);
 }
-assert.ok(manifest.unpackedSize < 320_000, `unpacked package is too large: ${manifest.unpackedSize} bytes`);
+assert.ok(manifest.unpackedSize < 330_000, `unpacked package is too large: ${manifest.unpackedSize} bytes`);
 const installRoot = mkdtempSync(join(tmpdir(), 'oh-my-traex-pack-check-'));
 try {
   const pack = spawnSync('npm', ['pack', '--pack-destination', installRoot], {
@@ -50,6 +50,13 @@ try {
   const piped = spawnSync(binary, ['exec', '--dry-run'], { encoding: 'utf8', input: 'verify piped package input' });
   assert.equal(piped.status, 0, piped.stderr || 'installed otx piped dry-run failed');
   assert.match(piped.stdout, /verify piped package input/, 'installed otx binary did not read stdin task input');
+  const resume = spawnSync(binary, [
+    'exec', 'resume', '--last', '--dry-run', '--allowed-tool', 'shell', 'verify installed resume',
+  ], { encoding: 'utf8' });
+  assert.equal(resume.status, 0, resume.stderr || 'installed otx resume dry-run failed');
+  assert.match(resume.stdout, /traex exec resume/, 'installed otx binary did not expose exec resume');
+  assert.match(resume.stdout, /--permission-mode custom/, 'installed otx resume lost the permission contract');
+  assert.match(resume.stdout, /--last/, 'installed otx resume did not select the latest session');
 } finally {
   rmSync(installRoot, { recursive: true, force: true });
 }

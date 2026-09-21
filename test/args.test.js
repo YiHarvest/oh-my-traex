@@ -71,3 +71,40 @@ test('recognizes explicit stdin task input', () => {
   assert.equal(parsed.stdinTask, true);
   assert.equal(parsed.task, '');
 });
+
+test('parses exec resume by session ID and with --last', () => {
+  const byId = parseArgs(['exec', 'resume', 'session-123', 'finish', 'the', 'tests']);
+  assert.equal(byId.command, 'resume');
+  assert.equal(byId.sessionId, 'session-123');
+  assert.equal(byId.task, 'finish the tests');
+
+  const latest = parseArgs(['exec', 'resume', '--last', '--all', '-m', 'GPT-5.5', 'continue']);
+  assert.equal(latest.command, 'resume');
+  assert.equal(latest.sessionId, undefined);
+  assert.equal(latest.task, 'continue');
+  assert.equal(latest.options.last, true);
+  assert.equal(latest.options.all, true);
+  assert.equal(latest.options.model, 'GPT-5.5');
+});
+
+test('parses resume stdin and safe native options', () => {
+  const parsed = parseArgs([
+    'exec', 'resume', '--last', '--json', '--ephemeral', '-i', 'context.png',
+    '-o', 'result.txt', '--allowed-tool=shell', '--disable', 'feature-a', '-',
+  ]);
+  assert.equal(parsed.stdinTask, true);
+  assert.equal(parsed.options.json, true);
+  assert.deepEqual(parsed.options.passthrough, [
+    '--ephemeral', '--image', 'context.png', '--output-last-message', 'result.txt',
+    '--allowed-tool', 'shell', '--disable', 'feature-a',
+  ]);
+});
+
+test('exec resume requires a session selector and keeps OTX permission controls', () => {
+  assert.throws(() => parseArgs(['exec', 'resume', '--json']), /session ID or --last/);
+  assert.throws(
+    () => parseArgs(['exec', 'resume', '--last', '--permission-mode', 'bypass_permissions']),
+    /managed by OTX/,
+  );
+  assert.throws(() => parseArgs(['exec', 'resume', '--last', '--sandbox=read-only']), /managed by OTX/);
+});
