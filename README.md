@@ -183,6 +183,8 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 | `otx doctor` | 静态检查 Node、TraeX、Git、tmux 和 multi-agent feature |
 | `otx doctor --live [-C repo] [-m model]` | 发起最小只读请求，验证 TraeX 认证、模型和后端路由 |
 
+静态 doctor 还会验证 `otx exec`、`resume` 和 `review` 所依赖的原生 TraeX 参数；若安装版本过旧，会列出具体缺失能力。
+
 Mailbox 投递使用一次性 receipt token，避免并发 worker 重复消费同一消息。`reconcile` 会将失败 worker 的任务最多自动重调度一次，优先选择同角色且写入要求一致的健康 worker；投递、完成与重调度均写入可增量读取的原子事件记录。
 
 ## 安全边界

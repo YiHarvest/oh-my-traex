@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildWorkerExecArgs, buildWorkerResumeArgs, detectTraeCapabilities, permissionArgs, projectTrustArgs } from '../src/team/trae.js';
+import { buildWorkerExecArgs, buildWorkerResumeArgs, detectTraeCapabilities, detectTraeCliCapabilities, missingTraeCliCapabilities, permissionArgs, projectTrustArgs } from '../src/team/trae.js';
 
 test('builds a process-scoped trust override for a worker worktree', () => {
   assert.deepEqual(projectTrustArgs('/tmp/otx worktree/worker-1'), [
@@ -11,25 +11,49 @@ test('builds a process-scoped trust override for a worker worktree', () => {
 
 test('detects the required TraeX runtime capabilities', () => {
   const run = (_command, args) => args[0] === 'exec' && args[1] === 'resume'
-    ? { status: 0, stdout: '--json --permission-mode --output-last-message --config', stderr: '' }
+    ? { status: 0, stdout: '--last --all --json --permission-mode --output-last-message --config', stderr: '' }
+    : args[0] === 'exec' && args[1] === 'review'
+      ? { status: 0, stdout: '--uncommitted --base --commit --json --permission-mode --output-last-message --config', stderr: '' }
     : args[0] === 'exec'
-      ? { status: 0, stdout: 'Commands: resume\n--json --sandbox --permission-mode --session-id --output-last-message --config --ephemeral', stderr: '' }
+      ? { status: 0, stdout: 'Commands: resume review\n--json --sandbox --permission-mode --session-id --output-last-message --config --ephemeral', stderr: '' }
     : { status: 0, stdout: 'Commands: app-server\n--remote-auth-token-env', stderr: '' };
-  assert.deepEqual(detectTraeCapabilities(run), {
+  assert.deepEqual(detectTraeCliCapabilities(run), {
     json: true, resume: true, sandbox: true, permissionMode: true, sessionId: true,
     outputLastMessage: true, projectConfig: true, ephemeral: true, resumeJson: true, resumePermissionMode: true,
-    resumeOutputLastMessage: true, resumeProjectConfig: true, appServer: true, remoteAuthToken: true,
+    resumeLast: true, resumeAll: true, resumeOutputLastMessage: true, resumeProjectConfig: true,
+    review: true, reviewUncommitted: true, reviewBase: true, reviewCommit: true,
+    reviewPermissionMode: true, reviewJson: true, reviewOutputLastMessage: true, reviewProjectConfig: true,
+    appServer: true, remoteAuthToken: true,
   });
 });
 
 test('reports the exact missing initial and resume capabilities', () => {
   const run = (_command, args) => args[0] === 'exec' && args[1] === 'resume'
     ? { status: 0, stdout: '--json --output-last-message --config', stderr: '' }
+    : args[0] === 'exec' && args[1] === 'review'
+      ? { status: 1, stdout: '', stderr: 'unknown command' }
     : args[0] === 'exec'
       ? { status: 0, stdout: 'Commands: resume\n--json --sandbox --session-id --output-last-message --config', stderr: '' }
       : { status: 0, stdout: '', stderr: '' };
   assert.throws(() => detectTraeCapabilities(run),
     /permissionMode, resumePermissionMode/);
+});
+
+test('reports missing public exec resume and review capabilities without blocking team runtime', () => {
+  const run = (_command, args) => args[0] === 'exec' && args[1] === 'resume'
+    ? { status: 0, stdout: '--json --permission-mode --output-last-message --config', stderr: '' }
+    : args[0] === 'exec' && args[1] === 'review'
+      ? { status: 1, stdout: '', stderr: 'unknown command' }
+      : args[0] === 'exec'
+        ? { status: 0, stdout: 'Commands: resume\n--json --sandbox --permission-mode --session-id --output-last-message --config', stderr: '' }
+        : { status: 0, stdout: '', stderr: '' };
+  const runtimeCapabilities = detectTraeCapabilities(run);
+  assert.equal('review' in runtimeCapabilities, false);
+  const capabilities = detectTraeCliCapabilities(run);
+  assert.deepEqual(missingTraeCliCapabilities(capabilities), [
+    'resumeLast', 'resumeAll', 'review', 'reviewUncommitted', 'reviewBase', 'reviewCommit',
+    'reviewPermissionMode', 'reviewJson', 'reviewOutputLastMessage', 'reviewProjectConfig',
+  ]);
 });
 
 test('builds version-adapted initial and resume worker commands', () => {
