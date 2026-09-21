@@ -14,13 +14,13 @@ const parsed = JSON.parse(result.stdout);
 const manifest = Array.isArray(parsed) ? parsed[0] : parsed['oh-my-traex'];
 assert.ok(manifest, 'npm pack did not return an oh-my-traex manifest');
 const paths = manifest.files.map((file) => file.path);
-for (const required of ['src/cli.js', 'src/team/runtime.js', 'dashboard-prototype/live-server.js', 'README.md', 'LICENSE']) {
+for (const required of ['src/cli.js', 'src/team/runtime.js', 'dashboard-prototype/live-server.js', 'README.md', 'CHANGELOG.md', 'LICENSE']) {
   assert.ok(paths.includes(required), `package is missing ${required}`);
 }
 for (const excludedPrefix of ['test/', 'assets/', 'docs/', '.github/']) {
   assert.equal(paths.some((path) => path.startsWith(excludedPrefix)), false, `package contains ${excludedPrefix}`);
 }
-assert.ok(manifest.unpackedSize < 330_000, `unpacked package is too large: ${manifest.unpackedSize} bytes`);
+assert.ok(manifest.unpackedSize < 340_000, `unpacked package is too large: ${manifest.unpackedSize} bytes`);
 const installRoot = mkdtempSync(join(tmpdir(), 'oh-my-traex-pack-check-'));
 try {
   const pack = spawnSync('npm', ['pack', '--pack-destination', installRoot], {
