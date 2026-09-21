@@ -2,7 +2,8 @@ const MODES = new Set(['conservative', 'balanced', 'aggressive']);
 
 export function parseArgs(argv) {
   const args = [...argv];
-  const command = args[0] && !args[0].startsWith('-') ? args.shift() : 'run';
+  const requestedCommand = args[0] && !args[0].startsWith('-') ? args.shift() : 'exec';
+  const command = requestedCommand === 'run' ? 'exec' : requestedCommand;
   const options = { workers: 4, mode: 'balanced', cwd: process.cwd(), ui: 'none', passthrough: [] };
   const taskParts = [];
 

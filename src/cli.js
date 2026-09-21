@@ -14,7 +14,8 @@ import { detectTraeCapabilities, permissionArgs, TRAE_PLANNER_SANDBOX, TRAE_WORK
 const HELP = `oh-my-traex (otx) - TraeX-native multi-agent orchestration
 
 Usage:
-  otx run [options] "task"
+  otx exec [options] "task"
+  otx run [options] "task"       Alias for otx exec
   otx prompt [options] "task"
   otx team [N:role] [options] "task"
   otx team list
@@ -43,8 +44,8 @@ Options:
   -h, --help                Show this help
 
 Examples:
-  otx run "Implement login rate limiting and tests"
-  otx run -n 3 --mode conservative "Review this repository for security issues"
+  otx exec "Implement login rate limiting and tests"
+  otx exec -n 3 --mode conservative "Review this repository for security issues"
   otx prompt "Refactor the parser without changing behavior"`;
 
 export async function main(argv = process.argv.slice(2)) {
@@ -55,7 +56,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (options.help || command === 'help') return print(HELP);
     if (command === 'roles') return print(roleCatalog());
     if (command === 'doctor') return doctor();
-    if (!['run', 'prompt'].includes(command)) throw new Error(`Unknown command: ${command}`);
+    if (!['exec', 'prompt'].includes(command)) throw new Error(`Unknown command: ${command}`);
     if (!task) throw new Error(`${command} requires a task.`);
     if (options.ui === 'dashboard' && options.json) {
       throw new Error('--json cannot be used with --ui dashboard.');

@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 test('dry-run renders a safe TraeX exec command without starting a session', () => {
   const result = spawnSync(
     process.execPath,
-    ['src/cli.js', 'run', '--dry-run', '--read-only', '-n', '2', 'audit the API'],
+    ['src/cli.js', 'exec', '--dry-run', '--read-only', '-n', '2', 'audit the API'],
     { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
   );
 
@@ -17,10 +17,21 @@ test('dry-run renders a safe TraeX exec command without starting a session', () 
   assert.match(result.stdout, /audit the API/);
 });
 
+test('run remains a compatibility alias for exec', () => {
+  const result = spawnSync(
+    process.execPath,
+    ['src/cli.js', 'run', '--dry-run', 'audit the API'],
+    { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /traex exec --skip-git-repo-check/);
+});
+
 test('dashboard dry-run reports the planned UI without requiring tmux', () => {
   const result = spawnSync(
     process.execPath,
-    ['src/cli.js', 'run', '--dry-run', '--ui', 'dashboard', 'audit the API'],
+    ['src/cli.js', 'exec', '--dry-run', '--ui', 'dashboard', 'audit the API'],
     { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
   );
 
@@ -31,7 +42,7 @@ test('dashboard dry-run reports the planned UI without requiring tmux', () => {
 test('dashboard mode rejects JSON exec output', () => {
   const result = spawnSync(
     process.execPath,
-    ['src/cli.js', 'run', '--ui', 'dashboard', '--json', 'audit the API'],
+    ['src/cli.js', 'exec', '--ui', 'dashboard', '--json', 'audit the API'],
     { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
   );
 

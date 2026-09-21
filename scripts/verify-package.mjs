@@ -37,7 +37,8 @@ try {
   const help = spawnSync(binary, ['--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr || 'installed otx --help failed');
   assert.match(help.stdout, /oh-my-traex \(otx\)/, 'installed otx binary produced no help output');
-  const dryRun = spawnSync(binary, ['run', '--dry-run', 'verify installed package'], { encoding: 'utf8' });
+  assert.match(help.stdout, /otx exec/, 'installed otx help does not expose the canonical exec command');
+  const dryRun = spawnSync(binary, ['exec', '--dry-run', 'verify installed package'], { encoding: 'utf8' });
   assert.equal(dryRun.status, 0, dryRun.stderr || 'installed otx dry-run failed');
   assert.match(dryRun.stdout, /traex exec/, 'installed otx binary did not execute main');
 } finally {
