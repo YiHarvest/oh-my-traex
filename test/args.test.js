@@ -108,3 +108,42 @@ test('exec resume requires a session selector and keeps OTX permission controls'
   );
   assert.throws(() => parseArgs(['exec', 'resume', '--last', '--sandbox=read-only']), /managed by OTX/);
 });
+
+test('parses exec review revision selectors and safe native options', () => {
+  const base = parseArgs(['exec', 'review', '--base', 'main', '--json', '--ephemeral']);
+  assert.equal(base.command, 'review');
+  assert.deepEqual(base.target, { kind: 'base', value: 'main' });
+  assert.equal(base.options.json, true);
+  assert.deepEqual(base.options.passthrough, ['--ephemeral']);
+
+  const commit = parseArgs([
+    'exec', 'review', '--commit=abc123', '--title', 'Fix parser', '-o', 'review.txt',
+    '--allowed-tool=shell', '--disable', 'feature-a',
+  ]);
+  assert.deepEqual(commit.target, { kind: 'commit', value: 'abc123' });
+  assert.deepEqual(commit.options.passthrough, [
+    '--title', 'Fix parser', '--output-last-message', 'review.txt',
+    '--allowed-tool', 'shell', '--disable', 'feature-a',
+  ]);
+});
+
+test('parses exec review custom instructions and explicit stdin', () => {
+  const custom = parseArgs(['exec', 'review', 'focus', 'on', 'security']);
+  assert.equal(custom.task, 'focus on security');
+  assert.equal(custom.target, undefined);
+
+  const stdin = parseArgs(['exec', 'review', '-']);
+  assert.equal(stdin.stdinTask, true);
+  assert.equal(stdin.task, '');
+});
+
+test('exec review accepts only one target and keeps OTX permission controls', () => {
+  assert.throws(
+    () => parseArgs(['exec', 'review', '--base', 'main', '--commit', 'abc123']),
+    /only one of --uncommitted, --base, or --commit/,
+  );
+  assert.throws(
+    () => parseArgs(['exec', 'review', '--uncommitted', '--permission-mode=bypass_permissions']),
+    /managed by OTX/,
+  );
+});

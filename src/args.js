@@ -22,6 +22,15 @@ const TRAE_RESUME_VALUE_OPTIONS = new Map([
   ['--enable', '--enable'], ['--disable', '--disable'],
 ]);
 const TRAE_RESUME_BOOLEAN_OPTIONS = new Set(['--ephemeral']);
+const TRAE_REVIEW_VALUE_OPTIONS = new Map([
+  ['--title', '--title'],
+  ['--output-last-message', '--output-last-message'], ['-o', '--output-last-message'],
+  ['--allowed-tool', '--allowed-tool'],
+  ['--disallowed-tool', '--disallowed-tool'],
+  ['--shell-tool-timeout', '--shell-tool-timeout'],
+  ['--enable', '--enable'], ['--disable', '--disable'],
+]);
+const TRAE_REVIEW_BOOLEAN_OPTIONS = new Set(['--ephemeral']);
 const OTX_MANAGED_OPTIONS = new Set([
   '--permission-mode', '--sandbox', '-s', '--dangerously-bypass-approvals-and-sandbox',
   '-y', '--dangerously-bypass-hook-trust', '--ignore-user-config', '--ignore-rules',
@@ -35,6 +44,10 @@ export function parseArgs(argv) {
   if (command === 'exec' && args[0] === 'resume') {
     args.shift();
     return parseResumeArgs(args);
+  }
+  if (command === 'exec' && args[0] === 'review') {
+    args.shift();
+    return parseReviewArgs(args);
   }
   const options = { workers: 4, mode: 'balanced', cwd: process.cwd(), ui: 'none', passthrough: [] };
   const taskParts = [];
@@ -135,6 +148,61 @@ export function parseResumeArgs(argv) {
     throw new Error('exec resume requires a session ID or --last.');
   }
   return { command: 'resume', sessionId, task: positionals.join(' ').trim(), stdinTask, options };
+}
+
+export function parseReviewArgs(argv) {
+  const args = [...argv];
+  const options = { cwd: process.cwd(), passthrough: [] };
+  const taskParts = [];
+  let stdinTask = false;
+  let target;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '-') {
+      stdinTask = true;
+      continue;
+    }
+    if (arg === '--') {
+      taskParts.push(...args.slice(index + 1));
+      break;
+    }
+    if (arg === '--uncommitted') target = setReviewTarget(target, 'uncommitted', true);
+    else if (arg === '--base' || arg === '--commit') {
+      target = setReviewTarget(target, arg.slice(2), requireValue(args, ++index, arg));
+    }
+    else if (arg.startsWith('--base=') || arg.startsWith('--commit=')) {
+      const [flag, value] = arg.split(/=(.*)/s, 2);
+      if (!value) throw new Error(`${flag} requires a value.`);
+      target = setReviewTarget(target, flag.slice(2), value);
+    }
+    else if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--json') options.json = true;
+    else if (arg === '--model' || arg === '-m') options.model = requireValue(args, ++index, arg);
+    else if (arg === '--cwd' || arg === '-C') options.cwd = requireValue(args, ++index, arg);
+    else if (arg === '--help' || arg === '-h') options.help = true;
+    else if (TRAE_REVIEW_BOOLEAN_OPTIONS.has(arg)) options.passthrough.push(arg);
+    else if (TRAE_REVIEW_VALUE_OPTIONS.has(arg)) {
+      options.passthrough.push(TRAE_REVIEW_VALUE_OPTIONS.get(arg), requireValue(args, ++index, arg));
+    }
+    else if (arg.startsWith('--') && TRAE_REVIEW_VALUE_OPTIONS.has(arg.split('=', 1)[0]) && arg.includes('=')) {
+      const [flag, value] = arg.split(/=(.*)/s, 2);
+      if (!value) throw new Error(`${flag} requires a value.`);
+      options.passthrough.push(TRAE_REVIEW_VALUE_OPTIONS.get(flag), value);
+    }
+    else if (OTX_MANAGED_OPTIONS.has(arg) || [...OTX_MANAGED_OPTIONS].some((flag) => arg.startsWith(`${flag}=`))) {
+      throw new Error(`${arg.split('=', 1)[0]} is managed by OTX and cannot be overridden.`);
+    }
+    else if (arg.startsWith('-')) throw new Error(`Unknown review option: ${arg}`);
+    else taskParts.push(arg);
+  }
+
+  return { command: 'review', target, task: taskParts.join(' ').trim(), stdinTask, options };
+}
+
+function setReviewTarget(current, kind, value) {
+  if (current) throw new Error('exec review accepts only one of --uncommitted, --base, or --commit.');
+  return { kind, value };
 }
 
 function requireValue(args, index, flag) {
