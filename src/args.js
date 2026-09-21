@@ -25,10 +25,15 @@ export function parseArgs(argv) {
   const command = requestedCommand === 'run' ? 'exec' : requestedCommand;
   const options = { workers: 4, mode: 'balanced', cwd: process.cwd(), ui: 'none', passthrough: [] };
   const taskParts = [];
+  let stdinTask = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === '--') {
+    if (arg === '-') {
+      stdinTask = true;
+      continue;
+    }
+    else if (arg === '--') {
       taskParts.push(...args.slice(index + 1));
       break;
     }
@@ -70,7 +75,7 @@ export function parseArgs(argv) {
     throw new Error('--ui must be none or dashboard.');
   }
 
-  return { command, task: taskParts.join(' ').trim(), options };
+  return { command, task: taskParts.join(' ').trim(), stdinTask, options };
 }
 
 function requireValue(args, index, flag) {

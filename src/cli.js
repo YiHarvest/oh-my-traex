@@ -8,6 +8,7 @@ import { parseArgs } from './args.js';
 import { buildOrchestratorPrompt } from './prompt.js';
 import { roleCatalog } from './roles.js';
 import { parseDoctorArgs, runLiveExecCheck } from './doctor.js';
+import { readTaskInput } from './stdin.js';
 import { scheduleDashboardPrompt, startDashboardRuntime, startDashboardUi, stopDashboardRuntime } from './dashboard.js';
 import { runTeamCommand } from './team/cli.js';
 import { detectTraeCapabilities, permissionArgs, TRAE_PLANNER_SANDBOX, TRAE_WORKER_SANDBOX } from './team/trae.js';
@@ -16,6 +17,7 @@ const HELP = `oh-my-traex (otx) - TraeX-native multi-agent orchestration
 
 Usage:
   otx exec [options] "task"
+  otx exec [options] -            Read the task from stdin
   otx run [options] "task"       Alias for otx exec
   otx prompt [options] "task"
   otx team [N:role] [options] "task"
@@ -59,6 +61,7 @@ Options:
 Examples:
   otx exec "Implement login rate limiting and tests"
   otx exec -n 3 --mode conservative "Review this repository for security issues"
+  echo "Review this repository" | otx exec
   otx prompt "Refactor the parser without changing behavior"`;
 
 export async function main(argv = process.argv.slice(2)) {
@@ -66,11 +69,12 @@ export async function main(argv = process.argv.slice(2)) {
     if (argv[0] === 'team') return await runTeamCommand(argv.slice(1));
     if (argv[0] === 'dashboard') return runLiveDashboard(argv.slice(1));
     if (argv[0] === 'doctor') return doctor(argv.slice(1));
-    const { command, task, options } = parseArgs(argv);
+    const { command, task: argvTask, stdinTask, options } = parseArgs(argv);
     if (options.help || command === 'help') return print(HELP);
     if (command === 'roles') return print(roleCatalog());
     if (!['exec', 'prompt'].includes(command)) throw new Error(`Unknown command: ${command}`);
-    if (!task) throw new Error(`${command} requires a task.`);
+    const task = readTaskInput(argvTask, { stdinTask });
+    if (!task) throw new Error(`${command} requires a task argument or piped stdin.`);
     if (options.ui === 'dashboard' && options.json) {
       throw new Error('--json cannot be used with --ui dashboard.');
     }
@@ -121,7 +125,7 @@ export async function main(argv = process.argv.slice(2)) {
       }
     }
 
-    const result = spawnSync('traex', traeArgs, { cwd, stdio: 'inherit' });
+    const result = spawnSync('traex', traeArgs, { cwd, stdio: ['ignore', 'inherit', 'inherit'] });
     if (result.error) throw result.error;
     return result.status ?? 1;
   } catch (error) {
