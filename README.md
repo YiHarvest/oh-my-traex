@@ -205,13 +205,14 @@ npm test
 npm run test:coverage
 npm run test:stress
 npm run test:e2e:packed
+npm run test:e2e:packed:headless
 npm run pack:check
 npm run doctor
 npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"
 ```
 
-CI 在 Linux、macOS、Windows（Node.js 22）以及 Linux Node.js 24 上运行单元测试；Linux 另跑覆盖率、64 进程压力测试、打包校验和 packed runtime E2E。
+CI 在 Linux、macOS、Windows（Node.js 22）以及 Linux Node.js 24 上运行单元测试；Linux 另跑覆盖率、64 进程压力测试、打包校验和 tmux packed runtime E2E，macOS 与 Windows 会从 npm tarball 安装并运行 headless worker/supervisor 生命周期 E2E。
 
 ## 许可证
 
