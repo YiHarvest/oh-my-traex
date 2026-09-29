@@ -1,10 +1,11 @@
 import test from 'node:test';
+import { getEventListeners } from 'node:events';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildTeamHud, openTeamHud, watchTeamHud } from '../src/team/hud.js';
+import { buildTeamHud, openTeamHud, watchTeamHud, hudLeaderAlive, closeOwnedHud } from '../src/team/hud.js';
 
 const snapshot = {
   config: { name: 'release', status: 'running', mux_backend: 'tmux', leader_pane_id: '%1', run_id: 'run-1' },
@@ -109,3 +110,42 @@ function makeState(tmuxHandler = () => ({ status: 0, stdout: '' }), suffix = 're
   };
   return { root, cwd, stateDir, run, calls };
 }
+
+
+test('leader probe accepts cross-window presence and treats query failure as unknown', () => {
+  const owner = { pane: '%9', leader: '%1' };
+  const snapshot = (stdout, status = 0) => (command, args) => {
+    assert.ok(args.includes('-a'));
+    return { status, stdout };
+  };
+  assert.equal(hudLeaderAlive(owner, snapshot('%9\t0\n%1\t0\n')), true);
+  assert.equal(hudLeaderAlive(owner, snapshot('%9\t0\n%1\t1\n')), false);
+  assert.equal(hudLeaderAlive(owner, snapshot('%9\t0\n')), false);
+  assert.equal(hudLeaderAlive(owner, snapshot('', 1)), true);
+  assert.equal(hudLeaderAlive(owner, snapshot('bad')), true);
+});
+
+test('HUD cleanup rejects a reused pane or a different process', () => {
+  const owner = { pane: '%9', leader: '%1', team: 'demo', runId: 'run', pid: 123 };
+  const calls = [];
+  const run = (command, args) => { calls.push(args); return { status: 0, stdout: 'demo\t%1\trun\t123' }; };
+  assert.equal(closeOwnedHud({ ...owner, pid: 456 }, run), false);
+  assert.equal(calls.length, 1);
+  assert.equal(closeOwnedHud(owner, run), true);
+  assert.deepEqual(calls.at(-1), ['kill-pane', '-t', '%9']);
+});
+
+test('watch delay releases abort listeners after every refresh', async () => {
+  const fixture = makeState();
+  const controller = new AbortController();
+  let frames = 0;
+  try {
+    await watchTeamHud(fixture.cwd, 'release', { intervalMs: 250, signal: controller.signal, run: fixture.run,
+      output: { columns: 80, write(value) {
+        if (!value.includes('OTX release')) return;
+        assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+        if (++frames === 4) controller.abort();
+      } } });
+    assert.equal(frames, 4);
+  } finally { rmSync(fixture.root, { recursive: true, force: true }); }
+});
