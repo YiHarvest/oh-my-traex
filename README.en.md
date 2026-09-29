@@ -128,7 +128,7 @@ Team first requires a clean leader checkout, then follows this lifecycle:
 3. State is stored under `.git/otx/team/<team>/` in the Git common directory, visible from every worktree without dirtying the checkout.
 4. A worker claims a task only after its dependencies complete and renews the lease from its heartbeat loop. Expired leases can be reclaimed safely.
 5. The leader sends ordinary follow-ups through the mailbox or creates another durable task.
-6. Write workers must produce a clean commit; the leader validates the commit range before integration.
+6. Write workers must produce clean commits; the leader stages the complete batch transactionally in a temporary worktree and publishes it with one fast-forward only after every commit succeeds.
 7. Stop and cleanup re-check ownership and recoverability before touching panes, branches, or worktrees.
 
 Example state tree:
@@ -177,6 +177,7 @@ Example state tree:
 | `otx team diagnose <name>` | Inspect pane, PID, heartbeat, activity, and blockers |
 | `otx team doctor <name> [--repair]` | Validate/migrate state schemas and quarantine corrupt auxiliary records |
 | `otx team metrics <name> --json` | Emit queue, worker, lease, reschedule, recovery, and latency metrics |
+| `otx team hud <name> [--watch\|--tmux]` | Show compact Team state, refresh it in place, or open a read-only tmux HUD pane |
 | `otx team integrate <name> [workers...]` | Validate and cherry-pick worker commit ranges |
 | `otx team stop <name>` | Stop a Team after verifying pane ownership |
 | `otx team cleanup <name>` | Remove stopped, safe branches and worktrees |
@@ -194,7 +195,7 @@ Mailbox delivery uses one-time receipt tokens so concurrent consumers cannot pro
 - The Dashboard is loopback-only and exposes no arbitrary shell endpoint.
 - Worktree trust is injected only into the worker process and does not update the user's global trust list.
 - Pane termination validates team, worker, run ID, and original pane PID.
-- Dirty or unintegrated worktrees are never silently deleted by cleanup.
+- Dirty or unintegrated worktrees are never silently deleted by cleanup, and a multi-worker integration conflict never publishes partial results to the leader branch.
 - DAG claims use cross-process locks and tokens; expired or incorrect tokens cannot complete a task.
 
 ## Development and verification
@@ -206,6 +207,7 @@ npm test
 npm run test:coverage
 npm run test:stress
 npm run test:e2e:packed
+npm run test:e2e:packed:headless
 npm run pack:check
 npm run release:check
 npm run doctor
@@ -213,7 +215,7 @@ npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"
 ```
 
-CI runs unit tests on Linux, macOS, and Windows with Node.js 22, plus Linux with Node.js 24. Linux also runs coverage, 64-process stress tests, package verification, and the packed runtime E2E.
+CI runs unit tests on Linux, macOS, and Windows with Node.js 22, plus Linux with Node.js 24. Linux also runs coverage, 64-process stress tests, package verification, and the tmux packed runtime E2E. macOS and Windows install the npm tarball and exercise the headless worker/supervisor lifecycle end to end.
 
 ## License
 

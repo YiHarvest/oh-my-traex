@@ -128,6 +128,63 @@ test('invalidates integration evidence after leader history is reset and preserv
   }
 });
 
+test('rolls back the entire integration batch when a later worker conflicts', () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'otx-integration-transaction-'));
+  const bucket = join(dirname(repoRoot), basename(repoRoot) + '.otx-worktrees');
+  git(repoRoot, ['init', '-q', '-b', 'main']);
+  git(repoRoot, ['config', 'user.name', 'OTX Test']);
+  git(repoRoot, ['config', 'user.email', 'otx@example.com']);
+  git(repoRoot, ['config', 'core.autocrlf', 'false']);
+  writeFileSync(join(repoRoot, 'shared.txt'), 'base\n');
+  git(repoRoot, ['add', 'shared.txt']);
+  git(repoRoot, ['commit', '-q', '-m', 'init']);
+  const originalHead = git(repoRoot, ['rev-parse', 'HEAD']).stdout.trim();
+  const workers = createWorkerWorktrees({
+    repoRoot, teamName: 'transaction',
+    workers: [
+      { name: 'worker-1', index: 1, role: 'executor', assignment: 'one', requires_commit: true, status: 'starting' },
+      { name: 'worker-2', index: 2, role: 'executor', assignment: 'two', requires_commit: true, status: 'starting' },
+    ],
+  });
+  try {
+    writeFileSync(join(workers[0].worktree_path, 'one.txt'), 'one\n');
+    git(workers[0].worktree_path, ['add', 'one.txt']);
+    git(workers[0].worktree_path, ['commit', '-q', '-m', 'one']);
+    writeFileSync(join(workers[1].worktree_path, 'shared.txt'), 'worker two\n');
+    git(workers[1].worktree_path, ['add', 'shared.txt']);
+    git(workers[1].worktree_path, ['commit', '-q', '-m', 'two']);
+    writeFileSync(join(repoRoot, 'shared.txt'), 'leader change\n');
+    git(repoRoot, ['add', 'shared.txt']);
+    git(repoRoot, ['commit', '-q', '-m', 'leader change']);
+    const leaderHead = git(repoRoot, ['rev-parse', 'HEAD']).stdout.trim();
+
+    const initialized = initTeamState({
+      cwd: repoRoot, name: 'transaction', task: 'task', leaderPaneId: '%1',
+      leaderSessionId: 'leader', workers,
+    });
+    for (const worker of workers) {
+      const commit = git(worker.worktree_path, ['rev-parse', 'HEAD']).stdout.trim();
+      updateWorkerState(initialized.stateDir, worker.name, { status: 'completed', commit });
+    }
+
+    const result = integrateTeam(repoRoot, 'transaction');
+    assert.equal(result.ok, false);
+    assert.equal(result.rolled_back, true);
+    assert.deepEqual(result.results.map((entry) => entry.status), ['rolled_back', 'conflict']);
+    assert.equal(git(repoRoot, ['rev-parse', 'HEAD']).stdout.trim(), leaderHead);
+    assert.equal(readFileSync(join(repoRoot, 'shared.txt'), 'utf8'), 'leader change\n');
+    assert.equal(git(repoRoot, ['cat-file', '-e', `${originalHead}^{commit}`]).status, 0);
+    assert.equal(git(repoRoot, ['status', '--porcelain']).stdout, '');
+  } finally {
+    for (const worker of workers) {
+      git(repoRoot, ['worktree', 'remove', '--force', worker.worktree_path]);
+      git(repoRoot, ['branch', '-D', worker.branch]);
+    }
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(bucket, { recursive: true, force: true });
+  }
+});
+
 function git(cwd, args) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);

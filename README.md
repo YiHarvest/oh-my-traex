@@ -128,7 +128,7 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 3. 状态写入 Git common directory 下的 `.git/otx/team/<team>/`，所有 worktree 可见但不会污染工作区。
 4. Worker 在依赖完成后 claim task，并通过 heartbeat 续租；过期 lease 可被安全回收。
 5. Leader 通过 mailbox 发送普通 follow-up，或创建新的持久化任务。
-6. 写入型 worker 必须产生干净 commit；leader 验证 commit range 后再选择集成。
+6. 写入型 worker 必须产生干净 commit；leader 先在临时 worktree 中事务化验证整个 commit 批次，全部成功后才一次性 fast-forward 发布。
 7. Stop 和 cleanup 在操作 pane、branch 或 worktree 前重新验证所有权与可恢复状态。
 
 状态目录示例：
@@ -177,6 +177,7 @@ Dashboard 不提供任意 shell API。停止操作只会在 leader pane 反查�
 | `otx team diagnose <name>` | 查看 pane、PID、heartbeat、activity 和阻塞信息 |
 | `otx team doctor <name> [--repair]` | 校验/迁移状态 schema，并隔离损坏的辅助记录 |
 | `otx team metrics <name> --json` | 输出队列、worker、lease、重调度、恢复和延迟指标 |
+| `otx team hud <name> [--watch\|--tmux]` | 查看紧凑 Team 状态；可原地刷新或打开只读 tmux HUD pane |
 | `otx team integrate <name> [workers...]` | 验证并 cherry-pick worker commit range |
 | `otx team stop <name>` | 验证 pane ownership 后停止 Team |
 | `otx team cleanup <name>` | 清理已停止且安全的 branch/worktree |
@@ -194,7 +195,7 @@ Mailbox 投递使用一次性 receipt token，避免并发 worker 重复消费�
 - Dashboard 只绑定 loopback，不开放任意 shell endpoint。
 - Worktree 信任仅通过 worker 进程级配置覆盖，不写入用户全局信任列表。
 - 所有 pane kill 都校验 team、worker、run ID 与原始 pane PID。
-- dirty 或未集成 worktree 不会被 cleanup 静默删除。
+- dirty 或未集成 worktree 不会被 cleanup 静默删除；多 worker 集成发生冲突时不会向 leader 分支发布部分结果。
 - DAG claim 使用跨进程锁和 token；过期或错误 token 不能完成任务。
 
 ## 开发与验证
@@ -206,6 +207,7 @@ npm test
 npm run test:coverage
 npm run test:stress
 npm run test:e2e:packed
+npm run test:e2e:packed:headless
 npm run pack:check
 npm run release:check
 npm run doctor
@@ -213,7 +215,7 @@ npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"
 ```
 
-CI 在 Linux、macOS、Windows（Node.js 22）以及 Linux Node.js 24 上运行单元测试；Linux 另跑覆盖率、64 进程压力测试、打包校验和 packed runtime E2E。
+CI 在 Linux、macOS、Windows（Node.js 22）以及 Linux Node.js 24 上运行单元测试；Linux 另跑覆盖率、64 进程压力测试、打包校验和 tmux packed runtime E2E，macOS 与 Windows 会从 npm tarball 安装并运行 headless worker/supervisor 生命周期 E2E。
 
 ## 许可证
 
