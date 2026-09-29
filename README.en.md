@@ -228,3 +228,5 @@ New writing teams use the repository's npm test, or repeated --verify-command "c
 Worker evidence records the command, exit code and commit. Failed checks, timeouts or a dirty worktree prevent completion. Integration reruns the same checks in the staging worktree before publishing to the leader. Existing teams without a verification policy retain their previous behavior.
 
 Structured plans pass file_paths to workers and validate actual Git diffs at completion and integration. Both sides of renames must be owned. Out-of-scope edits remain in the worktree and fail with the affected paths. Static, dynamically added and legacy workers without declared paths are explicitly unenforced.
+
+Observers cache status for at most two seconds; Dashboard actions invalidate the cache immediately. Mutation and integration paths always read fresh state. Background collection pauses without SSE clients. Event counters read additions incrementally and reflect the retained event window after pruning.
