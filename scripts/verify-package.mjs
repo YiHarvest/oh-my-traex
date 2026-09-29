@@ -14,7 +14,7 @@ const parsed = JSON.parse(result.stdout);
 const manifest = Array.isArray(parsed) ? parsed[0] : parsed['oh-my-traex'];
 assert.ok(manifest, 'npm pack did not return an oh-my-traex manifest');
 const paths = manifest.files.map((file) => file.path);
-for (const required of ['src/cli.js', 'src/team/runtime.js', 'dashboard-prototype/live-server.js', 'README.md', 'LICENSE']) {
+for (const required of ['src/cli.js', 'src/team/runtime.js', 'dashboard-prototype/live-server.js', 'README.md', 'CHANGELOG.md', 'LICENSE']) {
   assert.ok(paths.includes(required), `package is missing ${required}`);
 }
 for (const excludedPrefix of ['test/', 'assets/', 'docs/', '.github/']) {

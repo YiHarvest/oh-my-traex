@@ -36,6 +36,7 @@ jobs:
       - run: npm run test:coverage
       - run: npm run test:stress
       - run: npm run pack:check
+      - run: npm run release:check
 
   packed-headless:
     strategy:

@@ -1,6 +1,6 @@
 {
   "name": "oh-my-traex",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Native and durable multi-agent orchestration for TraeX",
   "repository": {
     "type": "git",
@@ -21,6 +21,7 @@
     "test:e2e:packed": "node scripts/packed-runtime-e2e.mjs",
     "test:e2e:packed:headless": "node scripts/packed-headless-e2e.mjs",
     "pack:check": "node scripts/verify-package.mjs",
+    "release:check": "node scripts/release-manifest.mjs",
     "doctor": "node src/cli.js doctor",
     "prompt": "node src/cli.js prompt"
   },
@@ -32,6 +33,7 @@
     "dashboard-prototype/",
     "README.md",
     "README.en.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "publishConfig": {
