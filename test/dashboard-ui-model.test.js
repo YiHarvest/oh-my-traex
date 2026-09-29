@@ -1,3 +1,4 @@
+import { formatObservedUsage } from '../dashboard-prototype/ui-model.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { actionAvailability, buildWorkerActionPayload, nextWrappedIndex, parseDependencyIds, summarizeRuntime } from '../dashboard-prototype/ui-model.js';
@@ -37,4 +38,11 @@ test('builds explicit message, task, and worker membership actions', () => {
   assert.deepEqual(buildWorkerActionPayload({ mode: 'add', team: 'demo', target: 'reviewer', message: 'review', model: 'Seed-2.1-Turbo' }), {
     action: 'add-worker', team: 'demo', role: 'reviewer', assignment: 'review', model: 'Seed-2.1-Turbo',
   });
+});
+
+
+test('usage labels distinguish unknown from measured zero and estimated cost', () => {
+  assert.deepEqual(formatObservedUsage(), { tokens: '—', cost: '—' });
+  assert.deepEqual(formatObservedUsage({ input_tokens: 0, output_tokens: 0, estimated_cost_usd: 0 }), { tokens: '0 (observed)', cost: '$0.0000 est.' });
+  assert.deepEqual(formatObservedUsage({ input_tokens: 100, output_tokens: 20, estimated_cost_usd: null }), { tokens: '120 (observed)', cost: '—' });
 });
