@@ -7,6 +7,7 @@ import { auditTeamRecords } from './doctor.js';
 import { parseRetentionDuration, pruneTeamState } from './retention.js';
 import { collectTeamMetrics } from './metrics.js';
 import { permissionArgs, TRAE_WORKER_SANDBOX } from './trae.js';
+import { buildTeamHud, openTeamHud, readTeamHud, watchTeamHud } from './hud.js';
 
 const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 const TEAM_HELP = `oh-my-traex durable team runtime
@@ -16,6 +17,7 @@ Usage:
   otx team list [-C DIR] [--json]
   otx team status|reconcile|recover|supervise|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose|doctor|metrics <name> [-C DIR]
+  otx team hud <name> [--watch|--tmux] [--interval-ms N] [-C DIR]
   otx team events <name> [--after CURSOR] [--limit N] [-C DIR]
   otx team prune <name> [--older-than 30d] [--keep-events N] [--dry-run] [-C DIR]
   otx team add-worker <name> <role> [-C DIR] -- "assignment"
@@ -28,7 +30,7 @@ Usage:
 
 export function parseTeamArgs(args) {
   const tokens = [...args];
-  const subcommand = ['list', 'tasks', 'events', 'prune', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'doctor', 'metrics', 'status', 'reconcile', 'recover', 'supervise', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
+  const subcommand = ['list', 'tasks', 'events', 'prune', 'assign', 'add-worker', 'remove-worker', 'diagnose', 'doctor', 'metrics', 'hud', 'status', 'reconcile', 'recover', 'supervise', 'await', 'resume', 'stop', 'cleanup', 'send', 'broadcast', 'mailbox', 'integrate'].includes(tokens[0]) ? tokens.shift() : 'start';
   const options = { workers: 3, cwd: process.cwd(), timeoutMs: 3_600_000 };
   if (subcommand === 'list') {
     parseOptions(tokens, options);
@@ -106,6 +108,12 @@ export function parseTeamArgs(args) {
     const name = tokens.shift();
     if (!name) throw new Error(`team ${subcommand} requires a team name.`);
     parseOptions(tokens, options);
+    if (subcommand === 'hud' && options.intervalMs !== undefined && options.intervalMs < 250) {
+      throw new Error('HUD --interval-ms must be an integer of at least 250.');
+    }
+    if (subcommand === 'hud' && options.json && (options.watch || options.tmux)) {
+      throw new Error('HUD --json cannot be combined with --watch or --tmux.');
+    }
     return { subcommand, name, options };
   }
 
@@ -209,6 +217,28 @@ export async function runTeamCommand(args) {
     process.stdout.write(`${JSON.stringify(collectTeamMetrics(cwd, parsed.name), null, 2)}\n`);
     return 0;
   }
+  if (parsed.subcommand === 'hud') {
+    if (parsed.options.tmux) {
+      const result = openTeamHud(cwd, parsed.name, { intervalMs: parsed.options.intervalMs });
+      process.stdout.write(`otx team HUD ${result.reused ? 'already running in' : 'opened in'} ${result.pane_id}\n`);
+      return 0;
+    }
+    if (parsed.options.watch) {
+      const controller = new AbortController();
+      const stop = () => controller.abort();
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+      try { await watchTeamHud(cwd, parsed.name, { intervalMs: parsed.options.intervalMs, signal: controller.signal }); }
+      finally {
+        process.off('SIGINT', stop);
+        process.off('SIGTERM', stop);
+      }
+      return 0;
+    }
+    const state = readTeamHud(cwd, parsed.name);
+    process.stdout.write(parsed.options.json ? `${JSON.stringify(state, null, 2)}\n` : `${buildTeamHud(state)}\n`);
+    return 0;
+  }
   if (parsed.subcommand === 'integrate') {
     const result = integrateTeam(cwd, parsed.name, parsed.workers);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -294,6 +324,8 @@ function parseOptions(tokens, options) {
     else if (token === '--interval-ms') options.intervalMs = Number(requireValue(tokens, ++index, token));
     else if (token.startsWith('--interval-ms=')) options.intervalMs = Number(token.slice(14));
     else if (token === '--once') options.once = true;
+    else if (token === '--watch') options.watch = true;
+    else if (token === '--tmux') options.tmux = true;
     else if (token === '--repair') options.repair = true;
     else if (token === '--older-than') options.olderThan = requireValue(tokens, ++index, token);
     else if (token.startsWith('--older-than=')) options.olderThan = token.slice(13);
@@ -309,6 +341,7 @@ function parseOptions(tokens, options) {
   if (options.intervalMs !== undefined && (!Number.isInteger(options.intervalMs) || options.intervalMs < 100)) {
     throw new Error('--interval-ms must be an integer of at least 100.');
   }
+  if (options.watch && options.tmux) throw new Error('--watch and --tmux cannot be combined.');
   if (options.keepEvents !== undefined && (!Number.isInteger(options.keepEvents) || options.keepEvents < 1)) {
     throw new Error('--keep-events must be a positive integer.');
   }

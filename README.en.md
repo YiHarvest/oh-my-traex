@@ -176,6 +176,7 @@ Example state tree:
 | `otx team diagnose <name>` | Inspect pane, PID, heartbeat, activity, and blockers |
 | `otx team doctor <name> [--repair]` | Validate/migrate state schemas and quarantine corrupt auxiliary records |
 | `otx team metrics <name> --json` | Emit queue, worker, lease, reschedule, recovery, and latency metrics |
+| `otx team hud <name> [--watch\|--tmux]` | Show compact Team state, refresh it in place, or open a read-only tmux HUD pane |
 | `otx team integrate <name> [workers...]` | Validate and cherry-pick worker commit ranges |
 | `otx team stop <name>` | Stop a Team after verifying pane ownership |
 | `otx team cleanup <name>` | Remove stopped, safe branches and worktrees |
