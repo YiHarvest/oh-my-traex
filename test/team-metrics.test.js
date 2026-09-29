@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { appendTeamEvent } from '../src/team/events.js';
+import { pruneTeamState } from '../src/team/retention.js';
 import { collectTeamMetrics } from '../src/team/metrics.js';
 import { enqueueMailboxMessage, initTeamState, updateTaskState, updateWorkerState } from '../src/team/state.js';
 
@@ -28,6 +29,11 @@ test('collects queue, worker, recovery, and latency metrics', () => {
     assert.equal(metrics.message_queue_depth, 1);
     assert.equal(metrics.workers.completed, 1);
     assert.equal(metrics.reschedules, 1);
+    appendTeamEvent(initialized.stateDir, 'task.rescheduled');
+    assert.equal(collectTeamMetrics(cwd, 'demo', run).reschedules, 2);
+    pruneTeamState(cwd, 'demo', { olderThanMs: 0, keepEvents: 1, now: Date.now() + 1000 });
+    assert.equal(collectTeamMetrics(cwd, 'demo', run).reschedules, 1);
+    assert.equal(collectTeamMetrics(cwd, 'demo', run).task_lease_reclaims, 0);
     assert.equal(metrics.task_lease_reclaims, 1);
     assert.deepEqual(metrics.task_duration_ms, { count: 1, average: 2000, max: 2000 });
   } finally {
