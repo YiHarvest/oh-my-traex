@@ -11,6 +11,9 @@ const installRoot = join(root, 'install');
 const repo = join(root, 'repo');
 const binDir = join(root, 'bin');
 const cache = join(root, 'npm-cache');
+const stateDir = join(repo, '.git', 'otx', 'team', 'headless');
+let runtimeEnv;
+let failure;
 const npmCli = process.env.npm_execpath;
 if (!npmCli) throw new Error('packed headless E2E must be started through npm');
 
@@ -34,8 +37,9 @@ try {
   run('git', ['commit', '--allow-empty', '-qm', 'base'], { cwd: repo });
 
   const env = { ...process.env, ...fixtureEnv, PATH: `${binDir}${delimiter}${process.env.PATH || ''}` };
+  runtimeEnv = env;
   run(otx, [otxEntry, 'team', '1:reviewer', '--headless', '--no-plan', '--name', 'headless', '-C', repo, 'packed headless runtime'], { env });
-  const stateDir = join(repo, '.git', 'otx', 'team', 'headless');
+
   await waitFor(() => readWorker(stateDir).status === 'completed', 'headless worker');
 
   const config = readJson(join(stateDir, 'config.json'));
@@ -54,8 +58,25 @@ try {
   assert.equal(readJson(join(stateDir, 'config.json')).status, 'cleaned', 'packed headless cleanup did not finalize state');
   assert.equal(existsSync(worker.worktree_path), false, 'packed headless cleanup left its worker worktree behind');
   process.stdout.write(`packed headless E2E passed on ${process.platform}\n`);
+} catch (error) {
+  failure = error;
+  throw error;
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  try {
+    if (runtimeEnv && existsSync(join(stateDir, 'config.json'))) {
+      const config = readJson(join(stateDir, 'config.json'));
+      const worker = readWorker(stateDir);
+      if (config.status !== 'cleaned') run(process.execPath, [
+        join(installRoot, 'node_modules', 'oh-my-traex', 'src', 'cli.js'),
+        'team', 'stop', 'headless', '-C', repo, '--json',
+      ], { env: runtimeEnv });
+      await waitFor(() => !processAlive(worker.pane_pid) && !processAlive(config.supervisor_pane_pid), 'fixture shutdown');
+    }
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (cleanupError) {
+    if (!failure) throw cleanupError;
+    console.error('Fixture cleanup failed; original failure follows:', cleanupError.message);
+  }
 }
 
 function installFakeTraex(directory) {
