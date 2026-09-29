@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { runVerification } from './verification.js';
+
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -9,6 +11,7 @@ import { buildWorkerExecArgs, buildWorkerResumeArgs, detectTraeCapabilities } fr
 import { appendTeamEvent } from './events.js';
 
 const [stateDir, workerName, worktreePath, promptPath, resultPath, sessionId, model = ''] = process.argv.slice(2);
+const verificationPolicy = JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8')).verification;
 const initialState = JSON.parse(readFileSync(join(stateDir, 'workers', `${workerName}.json`), 'utf8'));
 detectTraeCapabilities();
 const initialTaskId = String(initialState.initial_task_id || initialState.index);
@@ -51,7 +54,9 @@ const committed = Boolean(commitSha && commitSha !== initialState.base_commit);
 const clean = dirty.status === 0 && dirty.stdout.trim() === '';
 const hasResult = existsSync(resultPath) && statSync(resultPath).size > 0;
 const commitSatisfied = initialState.requires_commit ? committed : true;
-const finalStatus = exitCode === 0 && commitSatisfied && clean && hasResult ? 'completed' : 'failed';
+const verification = exitCode === 0 && commitSatisfied && clean && hasResult && initialState.requires_commit && verificationPolicy
+  ? runVerification(worktreePath, verificationPolicy) : null;
+const finalStatus = exitCode === 0 && commitSatisfied && clean && hasResult && verification?.passed !== false ? 'completed' : 'failed';
 const currentState = JSON.parse(readFileSync(join(stateDir, 'workers', workerName + '.json'), 'utf8'));
 if (currentState.status === 'cancelled') {
   process.stdout.write(`\n[otx] ${workerName} cancelled by leader.\n`);
@@ -66,15 +71,15 @@ const initialError = finalStatus === 'failed'
       ? 'worker produced no commit'
       : !clean
         ? 'worker worktree is dirty after completion'
-        : 'worker produced no result'
+        : verification?.error || 'worker produced no result'
   : null;
 const initialCompletion = completeWorkerTurn(stateDir, {
   workerName, taskId: initialTaskId, taskToken: initialClaim.token,
   taskUpdates: {
-    status: finalStatus, completed_at: initialCompletedAt, commit: commitSha, result_path: resultPath, error: initialError,
+    verification, status: finalStatus, completed_at: initialCompletedAt, commit: commitSha, result_path: resultPath, error: initialError,
   },
   workerUpdates: {
-    status: finalStatus, exit_code: exitCode, completed_at: initialCompletedAt, commit: commitSha, error: initialError,
+    verification, status: finalStatus, exit_code: exitCode, completed_at: initialCompletedAt, commit: commitSha, error: initialError,
   },
 });
 const persistedInitialStatus = initialCompletion.ok ? finalStatus : 'failed';
@@ -142,7 +147,9 @@ while (true) {
     : null;
   const followupCommitSatisfied = followupTask?.requires_commit ? followupCommitSha !== followupBaseCommit : true;
   const followupHasResult = existsSync(followupPath) && statSync(followupPath).size > 0;
-  const followupStatus = followupExit === 0
+  const followupVerification = followupExit === 0 && followupCommitSatisfied && followupHasResult && followupStartState.requires_commit && verificationPolicy
+    ? runVerification(worktreePath, verificationPolicy) : null;
+  const followupStatus = followupVerification?.passed !== false && followupExit === 0
     && followupDirty.status === 0
     && followupDirty.stdout.trim() === ''
     && followupCommitSatisfied
@@ -153,21 +160,22 @@ while (true) {
     ? followupExit !== 0 ? `follow-up exited ${followupExit}`
       : !followupCommitSatisfied ? 'follow-up task produced no commit'
         : !followupHasResult ? 'follow-up produced no result'
-          : 'follow-up worktree is dirty'
+          : followupVerification?.error || 'follow-up worktree is dirty'
     : null;
   const completedAt = new Date().toISOString();
   const completion = completeWorkerTurn(stateDir, {
     workerName, messageId: message.id, taskId: message.task_id,
     taskToken: taskClaim?.token, receiptToken,
     taskUpdates: {
-      status: followupStatus, completed_at: completedAt, commit: followupCommitSha,
+      verification: followupVerification, status: followupStatus, completed_at: completedAt, commit: followupCommitSha,
       result_path: followupPath, error: followupError,
     },
     messageUpdates: {
-      status: followupStatus, completed_at: completedAt, result_path: followupPath,
+      verification: followupVerification, status: followupStatus, completed_at: completedAt, result_path: followupPath,
       commit: followupCommitSha, error: followupError,
     },
     workerUpdates: {
+      verification: followupVerification,
       status: followupStatus,
       current_message_id: null,
       current_task_id: null,

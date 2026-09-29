@@ -28,7 +28,7 @@ test('team startup launches an owned supervisor in a detached tmux window', asyn
       }
       return { status: 0, stdout: '', stderr: '' };
     };
-    runtime = await startTeam({
+    runtime = await startTeam({ verifyCommands: ['echo verified'],
       cwd,
       task: 'test supervisor',
       workerCount: 1,

@@ -220,3 +220,9 @@ CI runs unit tests on Linux, macOS, and Windows with Node.js 22, plus Linux with
 ## License
 
 [MIT](LICENSE) © 2026-present [YiHarvest](https://github.com/YiHarvest)
+
+### Verification commands
+
+New writing teams use the repository's npm test, or repeated --verify-command "command" options. Repositories without a test script must supply a command. These trusted project checks run locally with a 120-second timeout per command.
+
+Worker evidence records the command, exit code and commit. Failed checks, timeouts or a dirty worktree prevent completion. Integration reruns the same checks in the staging worktree before publishing to the leader. Existing teams without a verification policy retain their previous behavior.

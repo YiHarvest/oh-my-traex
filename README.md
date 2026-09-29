@@ -220,3 +220,9 @@ CI 在 Linux、macOS、Windows（Node.js 22）以及 Linux Node.js 24 上运行�
 ## 许可证
 
 [MIT](LICENSE) © 2026-present [YiHarvest](https://github.com/YiHarvest)
+
+### 验证命令
+
+新建写入型 Team 会自动使用仓库的 npm test，或使用重复的 --verify-command "命令" 指定检查。没有测试脚本的仓库必须显式指定命令。命令由本地运行时执行，默认每条最多 120 秒；仅配置可信的项目检查。
+
+每个写入 worker 的检查记录包含命令、退出码和 commit；失败、超时或检查后工作区变脏时，任务不能完成。集成会在临时工作区再次执行同一检查，失败时保留 leader HEAD。旧 Team 未配置验证策略时保持原行为。
