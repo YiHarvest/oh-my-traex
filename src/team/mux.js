@@ -1,5 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { processIdentity } from './process.js';
+
+export { processIdentity } from './process.js';
 
 export function createMuxAdapter({ backend = 'tmux', run = spawnSync, spawnProcess = spawn, leaderPaneId, readProcessIdentity = processIdentity } = {}) {
   if (backend === 'tmux') return new TmuxAdapter(run, leaderPaneId);
@@ -143,30 +145,6 @@ class HeadlessAdapter {
     child.unref();
     return { id: `process:${child.pid}`, pid: child.pid, processIdentity: identity };
   }
-}
-
-export function processIdentity(pid, run = spawnSync, platform = process.platform, readFile = readFileSync) {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (platform === 'linux') {
-    try {
-      const stat = readFile(`/proc/${pid}/stat`, 'utf8');
-      const fields = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/);
-      return fields[19] ? `linux-start-ticks:${fields[19]}` : null;
-    } catch {
-      return null;
-    }
-  }
-  if (platform === 'win32') {
-    const result = run('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
-    ], { encoding: 'utf8' });
-    const started = result.status === 0 ? result.stdout.trim() : '';
-    return /^\d+$/.test(started) ? `windows-start-ticks:${started}` : null;
-  }
-  const result = run('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' });
-  const started = result.status === 0 ? result.stdout.trim() : '';
-  return started ? `posix-lstart:${started}` : null;
 }
 
 function waitForProcessIdentity(pid, readIdentity) {

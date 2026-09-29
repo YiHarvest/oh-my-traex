@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readVersionedRecord } from './codec.js';
+import { processIdentity, processOwnerIsLive } from './process.js';
 
 export const TASK_LEASE_MS = 15 * 60_000;
 export const MAILBOX_LEASE_MS = 15 * 60_000;
@@ -779,11 +780,16 @@ function withOrderedRecordLocks(stateDir, names, callback, index = 0) {
   return withStateLock(stateDir, names[index], () => withOrderedRecordLocks(stateDir, names, callback, index + 1));
 }
 
-export function withStateLock(stateDir, recordName, callback, { beforePublish } = {}) {
+export function withStateLock(stateDir, recordName, callback, { beforePublish, readProcessIdentity = processIdentity } = {}) {
   const lockPath = join(stateDir, '.locks', `${recordName}.lock`);
   mkdirSync(dirname(lockPath), { recursive: true });
-  removeAbandonedLockCandidates(lockPath);
-  const owner = { token: randomUUID(), pid: process.pid, acquired_at: new Date().toISOString() };
+  removeAbandonedLockCandidates(lockPath, readProcessIdentity);
+  const owner = {
+    token: randomUUID(),
+    pid: process.pid,
+    process_identity: readProcessIdentity(process.pid),
+    acquired_at: new Date().toISOString(),
+  };
   const candidatePath = `${lockPath}.candidate.${process.pid}.${owner.token}`;
   const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS;
   mkdirSync(candidatePath);
@@ -792,7 +798,7 @@ export function withStateLock(stateDir, recordName, callback, { beforePublish } 
     beforePublish?.(candidatePath);
     while (true) {
       if (existsSync(lockPath)) {
-        recoverAbandonedLock(lockPath);
+        recoverAbandonedLock(lockPath, readProcessIdentity);
         if (Date.now() >= deadline) throw new Error(`record lock timeout: ${recordName}`);
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
         continue;
@@ -803,7 +809,7 @@ export function withStateLock(stateDir, recordName, callback, { beforePublish } 
         break;
       } catch (error) {
         if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(error?.code)) throw error;
-        recoverAbandonedLock(lockPath);
+        recoverAbandonedLock(lockPath, readProcessIdentity);
         if (Date.now() >= deadline) throw new Error(`record lock timeout: ${recordName}`);
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
       }
@@ -820,7 +826,7 @@ export function withStateLock(stateDir, recordName, callback, { beforePublish } 
 
 const withRecordLock = withStateLock;
 
-function removeAbandonedLockCandidates(lockPath) {
+function removeAbandonedLockCandidates(lockPath, readProcessIdentity) {
   const directory = dirname(lockPath);
   const prefix = `${lockPath.slice(directory.length + 1)}.candidate.`;
   for (const name of readdirSync(directory).filter((entry) => entry.startsWith(prefix))) {
@@ -830,14 +836,14 @@ function removeAbandonedLockCandidates(lockPath) {
       owner = readJson(join(candidatePath, 'owner.json'));
     } catch {
       const candidatePid = Number(name.slice(prefix.length).split('.')[0]);
-      if (!processIsLive(candidatePid)) removeTree(candidatePath);
+      if (!processOwnerIsLive({ pid: candidatePid }, readProcessIdentity)) removeTree(candidatePath);
       continue;
     }
-    if (!processIsLive(owner.pid)) removeTree(candidatePath);
+    if (!processOwnerIsLive(owner, readProcessIdentity)) removeTree(candidatePath);
   }
 }
 
-function recoverAbandonedLock(lockPath) {
+function recoverAbandonedLock(lockPath, readProcessIdentity) {
   let owner;
   let ageMs;
   try {
@@ -847,7 +853,7 @@ function recoverAbandonedLock(lockPath) {
     if (ageMs > 30_000) quarantineLock(lockPath, 'unowned');
     return;
   }
-  if (ageMs <= 30_000 || processIsLive(owner.pid)) return;
+  if (ageMs <= 30_000 || processOwnerIsLive(owner, readProcessIdentity)) return;
   quarantineLock(lockPath, owner.token);
 }
 
@@ -891,16 +897,6 @@ function releaseOwnedLock(lockPath, token) {
       try { renameSync(releasePath, lockPath); } catch {}
     }
   } catch {}
-}
-
-function processIsLive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code !== 'ESRCH';
-  }
 }
 
 function renameWithRetry(source, target, timeoutMs = 1_000) {

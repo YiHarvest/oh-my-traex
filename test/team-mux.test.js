@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMuxAdapter, inspectRuntimeOwnership, processIdentity } from '../src/team/mux.js';
+import { processOwnerIsLive } from '../src/team/process.js';
 
 test('headless adapter launches detached owned processes', () => {
   const calls = [];
@@ -39,6 +40,12 @@ test('reads process birth identity through each supported platform adapter', () 
     return { status: 0, stdout: 'Sat Sep 20 10:00:00 2026\n' };
   };
   assert.equal(processIdentity(42, posixRun, 'darwin'), 'posix-lstart:Sat Sep 20 10:00:00 2026');
+});
+
+test('process liveness is fenced by birth identity and supports legacy owners', () => {
+  assert.equal(processOwnerIsLive({ pid: process.pid }, () => 'birth-2'), true);
+  assert.equal(processOwnerIsLive({ pid: process.pid, process_identity: 'birth-1' }, () => 'birth-1'), true);
+  assert.equal(processOwnerIsLive({ pid: process.pid, process_identity: 'birth-1' }, () => 'birth-2'), false);
 });
 
 test('rejects unknown mux backends', () => {
