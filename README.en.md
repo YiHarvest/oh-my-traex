@@ -205,13 +205,14 @@ npm test
 npm run test:coverage
 npm run test:stress
 npm run test:e2e:packed
+npm run test:e2e:packed:headless
 npm run pack:check
 npm run doctor
 npm pack --dry-run
 node src/cli.js run --dry-run -n 2 "Inspect this repository and propose improvements"
 ```
 
-CI runs unit tests on Linux, macOS, and Windows with Node.js 22, plus Linux with Node.js 24. Linux also runs coverage, 64-process stress tests, package verification, and the packed runtime E2E.
+CI runs unit tests on Linux, macOS, and Windows with Node.js 22, plus Linux with Node.js 24. Linux also runs coverage, 64-process stress tests, package verification, and the tmux packed runtime E2E. macOS and Windows install the npm tarball and exercise the headless worker/supervisor lifecycle end to end.
 
 ## License
 
