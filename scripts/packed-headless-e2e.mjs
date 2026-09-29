@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const projectRoot = new URL('..', import.meta.url);
 const root = mkdtempSync(join(tmpdir(), 'otx-packed-headless-'));
@@ -109,9 +108,31 @@ if (isFixtureProcess) {
 `, 'utf8');
 
   if (process.platform === 'win32') {
-    copyFileSync(process.execPath, join(directory, 'traex.exe'));
-    const importOption = `--import=${pathToFileURL(fixture).href}`;
-    return { NODE_OPTIONS: [process.env.NODE_OPTIONS, importOption].filter(Boolean).join(' ') };
+    const source = join(directory, 'FakeTraex.cs');
+    writeFileSync(source, `
+using System;
+using System.IO;
+public class FakeTraex {
+  public static void Main(string[] args) {
+    if (Array.IndexOf(args, "--help") >= 0) {
+      Console.WriteLine("Commands: resume app-server --json --sandbox --permission-mode --session-id --output-last-message --config --remote-auth-token-env");
+      return;
+    }
+    if (args.Length == 0 || args[0] != "exec") return;
+    int i = Array.IndexOf(args, "--output-last-message");
+    Console.WriteLine("{\\"type\\":\\"thread.started\\",\\"thread_id\\":\\"fake-windows\\"}");
+    if (i >= 0 && i + 1 < args.Length) {
+      Directory.CreateDirectory(Path.GetDirectoryName(args[i + 1]));
+      File.WriteAllText(args[i + 1], "packed headless fixture completed");
+    }
+  }
+}
+`, 'utf8');
+    const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
+    run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      'Add-Type -Path ' + quote(source) + ' -OutputAssembly ' + quote(join(directory, 'traex.exe')) + ' -OutputType ConsoleApplication',
+    ]);
+    return {};
   }
   const launcher = join(directory, 'traex');
   writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${fixture}" "$@"\n`, 'utf8');
