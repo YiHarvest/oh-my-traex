@@ -127,7 +127,7 @@ Team first requires a clean leader checkout, then follows this lifecycle:
 3. State is stored under `.git/otx/team/<team>/` in the Git common directory, visible from every worktree without dirtying the checkout.
 4. A worker claims a task only after its dependencies complete and renews the lease from its heartbeat loop. Expired leases can be reclaimed safely.
 5. The leader sends ordinary follow-ups through the mailbox or creates another durable task.
-6. Write workers must produce a clean commit; the leader validates the commit range before integration.
+6. Write workers must produce clean commits; the leader stages the complete batch transactionally in a temporary worktree and publishes it with one fast-forward only after every commit succeeds.
 7. Stop and cleanup re-check ownership and recoverability before touching panes, branches, or worktrees.
 
 Example state tree:
@@ -193,7 +193,7 @@ Mailbox delivery uses one-time receipt tokens so concurrent consumers cannot pro
 - The Dashboard is loopback-only and exposes no arbitrary shell endpoint.
 - Worktree trust is injected only into the worker process and does not update the user's global trust list.
 - Pane termination validates team, worker, run ID, and original pane PID.
-- Dirty or unintegrated worktrees are never silently deleted by cleanup.
+- Dirty or unintegrated worktrees are never silently deleted by cleanup, and a multi-worker integration conflict never publishes partial results to the leader branch.
 - DAG claims use cross-process locks and tokens; expired or incorrect tokens cannot complete a task.
 
 ## Development and verification
