@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseArgs } from '../src/args.js';
+import { EXEC_OPTION_SCHEMA, renderExecOptionHelp } from '../src/exec-options.js';
 
 test('parses exec with orchestration options', () => {
   const parsed = parseArgs(['exec', '-n', '3', '--mode', 'aggressive', '--model', 'GPT-5.5', 'ship', 'it']);
@@ -22,6 +23,14 @@ test('keeps run as a compatibility alias for exec', () => {
   const parsed = parseArgs(['run', 'ship', 'it']);
   assert.equal(parsed.command, 'exec');
   assert.equal(parsed.task, 'ship it');
+});
+
+test('prompt shares the exec orchestration option schema', () => {
+  const parsed = parseArgs(['prompt', '-n', '2', '--mode=conservative', 'plan', 'it']);
+  assert.equal(parsed.command, 'prompt');
+  assert.equal(parsed.options.workers, 2);
+  assert.equal(parsed.options.mode, 'conservative');
+  assert.equal(parsed.task, 'plan it');
 });
 
 test('rejects unsafe fanout', () => {
@@ -60,7 +69,7 @@ test('forwards a controlled subset of native TraeX exec options', () => {
 test('rejects native options that would override the OTX execution boundary', () => {
   for (const args of [
     ['--permission-mode', 'bypass_permissions'], ['--sandbox=danger-full-access'],
-    ['-c', 'approval_policy=never'], ['--ignore-rules'], ['-y'],
+    ['-c', 'approval_policy=never'], ['-c=approval_policy=never'], ['--ignore-rules'], ['-y'],
   ]) {
     assert.throws(() => parseArgs(['exec', ...args, 'task']), /managed by OTX/);
   }
@@ -146,4 +155,15 @@ test('exec review accepts only one target and keeps OTX permission controls', ()
     () => parseArgs(['exec', 'review', '--uncommitted', '--permission-mode=bypass_permissions']),
     /managed by OTX/,
   );
+});
+
+test('shared exec option schema keeps parser and help aligned', () => {
+  for (const command of ['exec', 'resume', 'review']) {
+    const help = renderExecOptionHelp(command);
+    for (const definition of EXEC_OPTION_SCHEMA.filter((entry) => entry.commands.includes(command))) {
+      assert.ok(definition.flags.some((flag) => help.includes(flag)), `${command} help omitted ${definition.flags[0]}`);
+    }
+  }
+  assert.match(renderExecOptionHelp('resume'), /--image, -i/);
+  assert.doesNotMatch(renderExecOptionHelp('review'), /--image/);
 });
