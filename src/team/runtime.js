@@ -1,3 +1,4 @@
+import { inspectWriteOwnership } from './ownership.js';
 import { verificationPolicy, runVerification, verificationCurrent } from './verification.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -477,6 +478,8 @@ function integrateTeamLocked(cwd, name, workerNames, run) {
   const results = [];
   const pending = [];
   for (const worker of selected) {
+    const ownership = inspectWriteOwnership(worker.worktree_path, worker.base_commit, worker.commit, worker.file_paths, run);
+    if (!ownership.passed) throw new Error(ownership.error);
     if (verifyIntegrationEvidence(state.config.cwd, worker, run).current) {
       results.push({ ...worker.integration, status: 'already_integrated' });
       continue;

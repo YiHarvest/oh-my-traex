@@ -6,6 +6,8 @@ Overall objective:
 ${task}
 
 Your role: ${worker.role}
+Allowed write paths: ${(worker.file_paths || []).join(', ') || 'unspecified (static or legacy assignment)'}
+Stay within declared paths; report required changes outside them to the leader.
 Your bounded assignment:
 ${worker.assignment}
 
