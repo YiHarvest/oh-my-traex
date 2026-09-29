@@ -230,3 +230,9 @@ Worker evidence records the command, exit code and commit. Failed checks, timeou
 Structured plans pass file_paths to workers and validate actual Git diffs at completion and integration. Both sides of renames must be owned. Out-of-scope edits remain in the worktree and fail with the affected paths. Static, dynamically added and legacy workers without declared paths are explicitly unenforced.
 
 Observers cache status for at most two seconds; Dashboard actions invalidate the cache immediately. Mutation and integration paths always read fresh state. Background collection pauses without SSE clients. Event counters read additions incrementally and reflect the retained event window after pruning.
+
+### Models and usage
+
+Use --model for the Team default and repeated --role-model explorer=model overrides. An explicit model on add-worker takes precedence over the role mapping. Names pass through to TraeX.
+
+Metrics and Dashboard metrics.usage aggregate observed worker turn.completed input, cached input and output tokens. Missing usage is null. Supply --model-prices prices.json with USD rates per million tokens: {"model":{"input_per_million":2,"cached_input_per_million":1,"output_per_million":5}}. Missing model/pricing yields null cost. Estimates cover reported worker usage only, excluding leader, planner and unreported child-agent usage.

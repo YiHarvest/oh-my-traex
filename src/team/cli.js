@@ -1,3 +1,4 @@
+import { parseRoleModel, loadModelPrices } from './models.js';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { addWorker, assignTeamTask, awaitTeam, broadcastTeamMessage, cleanupTeam, diagnoseTeam, integrateTeam, listTasks, readTeamEvents, readTeamMailbox, reconcileTeam, recoverTeam, removeWorker, resumeTeam, sendTeamMessage, startTeam, stopTeam, teamStatus } from './runtime.js';
@@ -13,7 +14,7 @@ const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 const TEAM_HELP = `oh-my-traex durable team runtime
 
 Usage:
-  otx team [N:role] [--name NAME] [--model MODEL] [--headless] [--no-plan] [--verify-command CMD] [--planner-timeout-ms N] [-C DIR] "task"
+  otx team [N:role] [--name NAME] [--model MODEL] [--headless] [--no-plan] [--role-model ROLE=MODEL] [--model-prices FILE] [--verify-command CMD] [--planner-timeout-ms N] [-C DIR] "task"
   otx team list [-C DIR] [--json]
   otx team status|reconcile|recover|supervise|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose|doctor|metrics <name> [-C DIR]
@@ -137,6 +138,11 @@ export function parseTeamArgs(args) {
     else if (token === '--cwd' || token === '-C') options.cwd = requireValue(tokens, ++index, token);
     else if (token === '--dry-run') options.dryRun = true;
     else if (token === '--headless') options.muxBackend = 'headless';
+    else if (token === '--role-model') {
+      const [role, model] = parseRoleModel(requireValue(tokens, ++index, token));
+      (options.roleModels ||= {})[role] = model;
+    }
+    else if (token === '--model-prices') options.modelPricesPath = requireValue(tokens, ++index, token);
     else if (token === '--verify-command') (options.verifyCommands ||= []).push(requireValue(tokens, ++index, token));
     else if (token === '--no-plan') options.autoPlan = false;
     else if (token === '--planner-timeout-ms') options.plannerTimeoutMs = Number(requireValue(tokens, ++index, token));
@@ -289,6 +295,8 @@ export async function runTeamCommand(args) {
     workerCount: parsed.options.workers,
     model: parsed.options.model,
     verifyCommands: parsed.options.verifyCommands,
+    roleModels: parsed.options.roleModels,
+    modelPrices: loadModelPrices(parsed.options.modelPricesPath),
     teamName: parsed.options.name,
     baseRole: parsed.options.role,
     autoPlan: parsed.options.autoPlan !== false,

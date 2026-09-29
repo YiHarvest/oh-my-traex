@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { addUsage } from './usage.js';
 import { inspectWriteOwnership } from './ownership.js';
 import { runVerification } from './verification.js';
 
@@ -12,7 +13,8 @@ import { buildWorkerExecArgs, buildWorkerResumeArgs, detectTraeCapabilities } fr
 import { appendTeamEvent } from './events.js';
 
 const [stateDir, workerName, worktreePath, promptPath, resultPath, sessionId, model = ''] = process.argv.slice(2);
-const verificationPolicy = JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8')).verification;
+const teamConfig = JSON.parse(readFileSync(join(stateDir, 'config.json'), 'utf8'));
+const verificationPolicy = teamConfig.verification;
 const initialState = JSON.parse(readFileSync(join(stateDir, 'workers', `${workerName}.json`), 'utf8'));
 detectTraeCapabilities();
 const initialTaskId = String(initialState.initial_task_id || initialState.index);
@@ -278,6 +280,11 @@ function attachJsonOutput(processHandle) {
       updateWorkerState(stateDir, workerName, { session_id: activeSessionId });
       process.stdout.write(`[otx] session ${activeSessionId}\n`);
       return;
+    }
+    if (event.type === 'turn.completed' && event.usage) {
+      const current = JSON.parse(readFileSync(join(stateDir, 'workers', workerName + '.json'), 'utf8'));
+      const usage = addUsage(current.usage, event, model || null, teamConfig.model_prices);
+      if (usage !== current.usage) updateWorkerState(stateDir, workerName, { usage });
     }
     const item = event.item;
     if (item?.type === 'agent_message' && item.text) process.stdout.write(`${item.text}\n`);

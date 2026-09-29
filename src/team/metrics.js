@@ -1,3 +1,4 @@
+import { summarizeUsage } from './usage.js';
 import { readMailbox } from './state.js';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,6 +13,8 @@ export function collectTeamMetrics(cwd, name, run, snapshot = {}) {
   const deliveryLatencies = messages.map(durationBetween('created_at', 'delivered_at')).filter(Number.isFinite);
   return {
     team: state.config.name,
+    usage: summarizeUsage(state.workers),
+    worker_models: Object.fromEntries(state.workers.map((worker) => [worker.name, worker.model || null])),
     generated_at: new Date().toISOString(),
     task_queue_depth: state.tasks.filter((task) => ['pending', 'blocked', 'in_progress'].includes(task.status)).length,
     message_queue_depth: messages.filter((message) => ['pending', 'working'].includes(message.status)).length,

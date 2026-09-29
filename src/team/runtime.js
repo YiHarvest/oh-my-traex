@@ -1,3 +1,4 @@
+import { selectWorkerModel } from './models.js';
 import { inspectWriteOwnership } from './ownership.js';
 import { verificationPolicy, runVerification, verificationCurrent } from './verification.js';
 import { spawn, spawnSync } from 'node:child_process';
@@ -16,7 +17,7 @@ import { appendTeamEvent, listTeamEvents } from './events.js';
 import { createMuxAdapter, inspectRuntimeOwnership, terminateOwnedRuntime } from './mux.js';
 import { permissionArgs, TRAE_WORKER_SANDBOX } from './trae.js';
 
-export async function startTeam({ cwd, task, workerCount, model, verifyCommands, teamName, baseRole, autoPlan = true, plannerTimeoutMs, muxBackend = 'tmux', env = process.env, run = spawnSync, spawnProcess = spawn }) {
+export async function startTeam({ cwd, task, workerCount, model, roleModels = {}, modelPrices = {}, verifyCommands, teamName, baseRole, autoPlan = true, plannerTimeoutMs, muxBackend = 'tmux', env = process.env, run = spawnSync, spawnProcess = spawn }) {
   if (muxBackend === 'tmux' && (!env.TMUX || !env.TMUX_PANE)) throw new Error('otx team requires running inside tmux unless --headless is used.');
   const name = teamName ? sanitizeTeamName(teamName) : defaultTeamName(task);
   const roles = ['executor', 'test-engineer', 'reviewer', 'explorer', 'architect'];
@@ -53,6 +54,7 @@ export async function startTeam({ cwd, task, workerCount, model, verifyCommands,
     finishTeamTransaction(transaction, 'rolled-back', { error: 'verification commands required' });
     throw new Error('writing teams require --verify-command when package.json has no test script');
   }
+  workers = workers.map((worker) => ({ ...worker, model: selectWorkerModel(worker.role, model, roleModels) }));
   let worktreeWorkers = [];
   try {
     worktreeWorkers = createWorkerWorktrees({ repoRoot, teamName: name, workers });
@@ -72,6 +74,7 @@ export async function startTeam({ cwd, task, workerCount, model, verifyCommands,
       model,
       plan,
       verification,
+      roleModels, modelPrices,
       planningMode,
       plannerFallback,
       leaderPaneId: muxBackend === 'tmux' ? env.TMUX_PANE : `process:${process.pid}`,
@@ -100,7 +103,7 @@ export async function startTeam({ cwd, task, workerCount, model, verifyCommands,
       const resultPath = join(workerDir, 'result.md');
       const sessionId = randomUUID();
       writeFileSync(promptPath, buildWorkerPrompt({ teamName: name, worker, task }), 'utf8');
-      const workerArgs = [stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, model || ''];
+      const workerArgs = [stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, worker.model || ''];
       const launched = mux.launchWorker({ cwd: worker.worktree_path, command: process.execPath, args: [runner, ...workerArgs], worker, config });
       createdPanes.push({ name: worker.name, pane_id: launched.id, pane_pid: launched.pid, process_identity: launched.processIdentity });
       updateWorkerState(stateDir, worker.name, { pane_id: launched.id, pane_pid: launched.pid, process_identity: launched.processIdentity, session_id: sessionId, result_path: resultPath, prompt_path: promptPath });
@@ -622,6 +625,7 @@ function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env
     name: `worker-${index}`,
     index,
     role,
+    model: model || selectWorkerModel(role, state.config.model, state.config.role_models),
     assignment,
     requires_commit: ['executor', 'test-engineer'].includes(role),
     status: 'starting',
@@ -649,7 +653,7 @@ function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env
     const sessionId = randomUUID();
     writeFileSync(promptPath, buildWorkerPrompt({ teamName: name, worker, task: assignment }), 'utf8');
     const runner = join(dirname(fileURLToPath(import.meta.url)), 'worker-run.js');
-    const workerArgs = [state.stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, model || state.config.model || ''];
+    const workerArgs = [state.stateDir, worker.name, worker.worktree_path, promptPath, resultPath, sessionId, worker.model || ''];
     launched = mux.launchWorker({ cwd: worker.worktree_path, command: process.execPath, args: [runner, ...workerArgs], worker, config: state.config });
     paneId = launched.id;
     panePid = launched.pid;
