@@ -17,7 +17,7 @@ import { appendTeamEvent, listTeamEvents } from './events.js';
 import { createMuxAdapter, inspectRuntimeOwnership, terminateOwnedRuntime } from './mux.js';
 import { permissionArgs, TRAE_WORKER_SANDBOX } from './trae.js';
 
-export async function startTeam({ cwd, task, workerCount, model, roleModels = {}, modelPrices = {}, verifyCommands, teamName, baseRole, autoPlan = true, plannerTimeoutMs, muxBackend = 'tmux', env = process.env, run = spawnSync, spawnProcess = spawn }) {
+export async function startTeam({ cwd, task, workerCount, model, roleModels = {}, modelPrices = {}, verifyCommands, prepareCommands, teamName, baseRole, autoPlan = true, plannerTimeoutMs, muxBackend = 'tmux', env = process.env, run = spawnSync, spawnProcess = spawn }) {
   if (muxBackend === 'tmux' && (!env.TMUX || !env.TMUX_PANE)) throw new Error('otx team requires running inside tmux unless --headless is used.');
   const name = teamName ? sanitizeTeamName(teamName) : defaultTeamName(task);
   const roles = ['executor', 'test-engineer', 'reviewer', 'explorer', 'architect'];
@@ -33,7 +33,7 @@ export async function startTeam({ cwd, task, workerCount, model, roleModels = {}
   if (repoRootResult.status !== 0) throw new Error('otx team requires a Git repository.');
   const repoRoot = repoRootResult.stdout.trim();
   assertCleanWorkspace(repoRoot);
-  const verification = verificationPolicy(repoRoot, verifyCommands);
+  const verification = verificationPolicy(repoRoot, verifyCommands, prepareCommands);
   assertTeamDoesNotExist(repoRoot, name);
   const statePath = teamStateDir(repoRoot, name);
   const transaction = beginTeamTransaction(statePath, 'start-team', { team: name, cwd: repoRoot });
@@ -187,7 +187,7 @@ function inspectTeam(cwd, name, run, persist) {
           ? 'dead'
           : heartbeatAgeMs !== null && heartbeatAgeMs > 30_000
             ? 'stale'
-            : currentWorker.status === 'working' && activityAgeMs !== null && activityAgeMs > 60_000
+            : currentWorker.status === 'working' && currentWorker.phase !== 'verifying' && activityAgeMs !== null && activityAgeMs > 60_000
               ? 'stalled'
             : 'healthy';
     const startupGrace = currentWorker.status === 'starting'
@@ -468,12 +468,12 @@ function rescheduleFailedTasks(state, run) {
   });
 }
 
-export function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
+export async function integrateTeam(cwd, name, workerNames = [], run = spawnSync) {
   return withStateLock(teamStateDir(cwd, name), 'integration',
-    () => integrateTeamLocked(cwd, name, workerNames, run));
+    () => integrateTeamLocked(cwd, name, workerNames, run), { timeoutMs: 0 });
 }
 
-function integrateTeamLocked(cwd, name, workerNames, run) {
+async function integrateTeamLocked(cwd, name, workerNames, run) {
   const state = reconcileTeam(cwd, name, run);
   if (state.config.status === 'running') throw new Error('team still has running or queued work; await completion before integration.');
   const leaderStatus = run('git', ['status', '--porcelain'], { cwd: state.config.cwd, encoding: 'utf8' });
@@ -509,15 +509,19 @@ function integrateTeamLocked(cwd, name, workerNames, run) {
     const integrationBase = worker.base_commit;
     const range = run('git', ['rev-list', '--reverse', `${integrationBase}..${worker.commit}`], { cwd: state.config.cwd, encoding: 'utf8' });
     if (range.status !== 0) throw new Error(`worker commit range is invalid: ${worker.name}`);
-    const sourceCommits = range.stdout.trim().split('\n').filter(Boolean);
-    if (sourceCommits.length === 0) throw new Error(`worker has no commits beyond its base: ${worker.name}`);
+    const fullRange = range.stdout.trim().split('\n').filter(Boolean);
+    const cherry = run('git', ['cherry', 'HEAD', worker.commit, integrationBase], { cwd: state.config.cwd, encoding: 'utf8' });
+    if (cherry.status !== 0) throw new Error('failed to inspect previously integrated patches');
+    const unapplied = new Set(cherry.stdout.trim().split('\n').filter((line) => line.startsWith('+ ')).map((line) => line.slice(2)));
+    const sourceCommits = fullRange.filter((commit) => unapplied.has(commit));
+    if (fullRange.length === 0) throw new Error(`worker has no commits beyond its base: ${worker.name}`);
     const alreadyIntegrated = run('git', ['merge-base', '--is-ancestor', worker.commit, 'HEAD'], { cwd: state.config.cwd, encoding: 'utf8' });
-    if (alreadyIntegrated.status === 0) {
+    if (alreadyIntegrated.status === 0 || sourceCommits.length === 0) {
       const record = {
         worker: worker.name,
         commit: worker.commit,
-        source_commits: sourceCommits,
-        integrated_commit: worker.commit,
+        source_commits: fullRange,
+        integrated_commit: run('git', ['rev-parse', 'HEAD'], { cwd: state.config.cwd, encoding: 'utf8' }).stdout.trim(),
         status: 'already_integrated',
       };
       updateWorkerState(state.stateDir, worker.name, { integration: record });
@@ -554,7 +558,15 @@ function integrateTeamLocked(cwd, name, workerNames, run) {
       }
       const stagedHead = run('git', ['rev-parse', 'HEAD'], { cwd: stagingPath, encoding: 'utf8' }).stdout.trim();
       if (state.config.verification) {
-        const verification = runVerification(stagingPath, state.config.verification, run);
+        const controller = new AbortController();
+        const watchStop = setInterval(() => {
+          const current = readTeamState(cwd, name).config;
+          if (['cleaned', 'cleanup_pending'].includes(current.status) || current.stopped_at !== state.config.stopped_at) controller.abort();
+        }, 100);
+        let verification;
+        try { verification = await runVerification(stagingPath, state.config.verification, run, { signal: controller.signal }); }
+        finally { clearInterval(watchStop); }
+        if (controller.signal.aborted) return { ok: false, rolled_back: true, verification, results: [] };
         updateTeamConfig(state.stateDir, { integration_verification: verification });
         if (!verification.passed) {
           updateTeamConfig(state.stateDir, { status: 'integration_failed' });
@@ -566,6 +578,7 @@ function integrateTeamLocked(cwd, name, workerNames, run) {
       if (currentHead !== originalHead || currentStatus.status !== 0 || currentStatus.stdout.trim()) {
         throw new Error('leader workspace changed during integration; staged result was not published.');
       }
+      if (readTeamState(cwd, name).config.stopped_at !== state.config.stopped_at) throw new Error('team stopped during integration');
       const publish = run('git', ['merge', '--ff-only', stagedHead], { cwd: state.config.cwd, encoding: 'utf8' });
       if (publish.status !== 0) throw new Error(String(publish.stderr || publish.stdout || 'failed to publish integration').trim());
       for (const result of results.filter((entry) => entry.status === 'staged')) {

@@ -14,7 +14,7 @@ const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 const TEAM_HELP = `oh-my-traex durable team runtime
 
 Usage:
-  otx team [N:role] [--name NAME] [--model MODEL] [--headless] [--no-plan] [--role-model ROLE=MODEL] [--model-prices FILE] [--verify-command CMD] [--planner-timeout-ms N] [-C DIR] "task"
+  otx team [N:role] [--name NAME] [--model MODEL] [--headless] [--no-plan] [--role-model ROLE=MODEL] [--model-prices FILE] [--prepare-command CMD] [--verify-command CMD] [--planner-timeout-ms N] [-C DIR] "task"
   otx team list [-C DIR] [--json]
   otx team status|reconcile|recover|supervise|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose|doctor|metrics <name> [-C DIR]
@@ -143,6 +143,7 @@ export function parseTeamArgs(args) {
       (options.roleModels ||= {})[role] = model;
     }
     else if (token === '--model-prices') options.modelPricesPath = requireValue(tokens, ++index, token);
+    else if (token === '--prepare-command') (options.prepareCommands ||= []).push(requireValue(tokens, ++index, token));
     else if (token === '--verify-command') (options.verifyCommands ||= []).push(requireValue(tokens, ++index, token));
     else if (token === '--no-plan') options.autoPlan = false;
     else if (token === '--planner-timeout-ms') options.plannerTimeoutMs = Number(requireValue(tokens, ++index, token));
@@ -247,7 +248,7 @@ export async function runTeamCommand(args) {
     return 0;
   }
   if (parsed.subcommand === 'integrate') {
-    const result = integrateTeam(cwd, parsed.name, parsed.workers);
+    const result = await integrateTeam(cwd, parsed.name, parsed.workers);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return result.ok ? 0 : 1;
   }
@@ -295,6 +296,7 @@ export async function runTeamCommand(args) {
     workerCount: parsed.options.workers,
     model: parsed.options.model,
     verifyCommands: parsed.options.verifyCommands,
+    prepareCommands: parsed.options.prepareCommands,
     roleModels: parsed.options.roleModels,
     modelPrices: loadModelPrices(parsed.options.modelPricesPath),
     teamName: parsed.options.name,
