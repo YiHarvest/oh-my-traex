@@ -783,7 +783,7 @@ function withOrderedRecordLocks(stateDir, names, callback, index = 0) {
   return withStateLock(stateDir, names[index], () => withOrderedRecordLocks(stateDir, names, callback, index + 1));
 }
 
-export function withStateLock(stateDir, recordName, callback, { beforePublish, readProcessIdentity = processIdentity } = {}) {
+export function withStateLock(stateDir, recordName, callback, { beforePublish, readProcessIdentity = processIdentity, timeoutMs = STATE_LOCK_TIMEOUT_MS } = {}) {
   const lockPath = join(stateDir, '.locks', `${recordName}.lock`);
   mkdirSync(dirname(lockPath), { recursive: true });
   removeAbandonedLockCandidates(lockPath, readProcessIdentity);
@@ -794,7 +794,7 @@ export function withStateLock(stateDir, recordName, callback, { beforePublish, r
     acquired_at: new Date().toISOString(),
   };
   const candidatePath = `${lockPath}.candidate.${process.pid}.${owner.token}`;
-  const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   mkdirSync(candidatePath);
   try {
     writeJsonAtomic(join(candidatePath, 'owner.json'), owner);
@@ -820,11 +820,12 @@ export function withStateLock(stateDir, recordName, callback, { beforePublish, r
   } finally {
     if (existsSync(candidatePath)) removeTree(candidatePath);
   }
-  try {
-    return callback();
-  } finally {
-    releaseOwnedLock(lockPath, owner.token);
-  }
+  let result;
+  try { result = callback(); }
+  catch (error) { releaseOwnedLock(lockPath, owner.token); throw error; }
+  if (result && typeof result.then === 'function') return result.finally(() => releaseOwnedLock(lockPath, owner.token));
+  releaseOwnedLock(lockPath, owner.token);
+  return result;
 }
 
 const withRecordLock = withStateLock;

@@ -20,28 +20,28 @@ function fixture() {
   git(cwd, 'commit', '--allow-empty', '-qm', 'base');
   return cwd;
 }
-test('verification records exit codes and binds evidence to commit and command', () => {
+test('verification records exit codes and binds evidence to commit and command', async () => {
   const cwd = fixture();
   try {
     const policy = verificationPolicy(cwd, ['node -e "process.exit(0)"']);
-    const evidence = runVerification(cwd, policy);
+    const evidence = await runVerification(cwd, policy);
     assert.equal(evidence.passed, true);
     assert.equal(verificationCurrent(evidence, evidence.commit, policy), true);
     assert.equal(verificationCurrent(evidence, 'different', policy), false);
     assert.equal(verificationCurrent(evidence, evidence.commit, { commands: ['different'] }), false);
-    const failed = runVerification(cwd, { commands: ['node -e "process.exit(7)"'] });
+    const failed = await runVerification(cwd, { commands: ['node -e "process.exit(7)"'] });
     assert.equal(failed.passed, false);
     assert.equal(failed.commands[0].exit_code, 7);
-    const dirty = runVerification(cwd, { commands: ['node -e "require(\'fs\').writeFileSync(\'unexpected\',\'x\')"'] });
+    const dirty = await runVerification(cwd, { commands: ['node -e "require(\'fs\').writeFileSync(\'unexpected\',\'x\')"'] });
     assert.equal(dirty.passed, false);
     assert.match(dirty.error, /dirty/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
-test('verification times out and missing commands never count as passing', () => {
+test('verification times out and missing commands never count as passing', async () => {
   const cwd = fixture();
   try {
-    assert.equal(runVerification(cwd, { commands: [] }).passed, false);
-    const result = runVerification(cwd, { commands: ['node -e "setTimeout(()=>{},500)"'], timeout_ms: 25 });
+    assert.equal((await runVerification(cwd, { commands: [] })).passed, false);
+    const result = await runVerification(cwd, { commands: ['node -e "setTimeout(()=>{},500)"'], timeout_ms: 25 });
     assert.equal(result.passed, false);
     assert.ok(result.commands[0].error);
     writeFileSync(join(cwd, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));
@@ -49,7 +49,7 @@ test('verification times out and missing commands never count as passing', () =>
     assert.deepEqual(parseTeamArgs(['--verify-command', 'npm test', '--verify-command', 'npm run lint', 'task']).options.verifyCommands, ['npm test', 'npm run lint']);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
-test('staging validation failure leaves leader HEAD unchanged even when each worker passed', () => {
+test('staging validation failure leaves leader HEAD unchanged even when each worker passed', async () => {
   const cwd = fixture();
   const policy = { commands: ['node -e "process.exit(require(\'fs\').existsSync(\'a\') && require(\'fs\').existsSync(\'b\') ? 1 : 0)"'] };
   const workers = createWorkerWorktrees({ repoRoot: cwd, teamName: 'verify', workers: ['a', 'b'].map((file, i) => ({
@@ -61,13 +61,13 @@ test('staging validation failure leaves leader HEAD unchanged even when each wor
       writeFileSync(join(worker.worktree_path, worker.assignment), 'x');
       git(worker.worktree_path, 'add', '.'); git(worker.worktree_path, 'commit', '-qm', worker.assignment);
       const commit = git(worker.worktree_path, 'rev-parse', 'HEAD');
-      const evidence = runVerification(worker.worktree_path, policy);
+      const evidence = await runVerification(worker.worktree_path, policy);
       assert.equal(evidence.passed, true);
       updateWorkerState(stateDir, worker.name, { status: 'completed', commit, verification: evidence });
       updateTaskState(stateDir, String(worker.index), { status: 'completed' });
     }
     const before = git(cwd, 'rev-parse', 'HEAD');
-    const result = integrateTeam(cwd, 'verify');
+    const result = await integrateTeam(cwd, 'verify');
     assert.equal(result.ok, false); assert.equal(result.rolled_back, true);
     assert.equal(result.verification.passed, false);
     assert.equal(git(cwd, 'rev-parse', 'HEAD'), before);
@@ -76,4 +76,27 @@ test('staging validation failure leaves leader HEAD unchanged even when each wor
     rmSync(cwd, { recursive: true, force: true });
     rmSync(cwd + '.otx-worktrees', { recursive: true, force: true });
   }
+});
+
+test('verification keeps timers responsive and supports cancellation', async () => {
+  const cwd = fixture(); let ticks = 0;
+  const timer = setInterval(() => ticks++, 20);
+  const controller = new AbortController();
+  const abort = setTimeout(() => controller.abort(), 150);
+  try {
+    const evidence = await runVerification(cwd, { commands: ['node -e "setTimeout(()=>{},5000)"'] }, undefined, { signal: controller.signal });
+    assert.equal(evidence.passed, false);
+    assert.match(evidence.error, /cancelled/);
+    assert.ok(ticks > 1);
+  } finally { clearInterval(timer); clearTimeout(abort); rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+});
+test('environment preparation is recorded separately from test failure', async () => {
+  const cwd = fixture();
+  try {
+    const evidence = await runVerification(cwd, { preparation: ['node -e "process.exit(4)"'], commands: ['node -e "process.exit(0)"'] });
+    assert.equal(evidence.passed, false);
+    assert.match(evidence.error, /environment preparation/);
+    assert.equal(evidence.preparation[0].exit_code, 4);
+    assert.equal(evidence.commands.length, 0);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });

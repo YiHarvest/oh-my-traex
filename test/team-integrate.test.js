@@ -8,7 +8,7 @@ import { initTeamState, readTeamState, updateTaskState, updateWorkerState } from
 import { cleanupTeam, integrateTeam, reconcileTeam, stopTeam } from '../src/team/runtime.js';
 import { createWorkerWorktrees } from '../src/team/worktree.js';
 
-test('integrates the complete validated worker commit range', () => {
+test('integrates the complete validated worker commit range', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'otx-integrate-'));
   const bucket = join(dirname(repoRoot), basename(repoRoot) + '.otx-worktrees');
   git(repoRoot, ['init', '-q', '-b', 'main']);
@@ -39,14 +39,23 @@ test('integrates the complete validated worker commit range', () => {
     updateWorkerState(initialized.stateDir, 'worker-1', { status: 'completed', commit });
     updateTaskState(initialized.stateDir, '1', { status: 'completed' });
 
-    const result = integrateTeam(repoRoot, 'demo', ['worker-1']);
+    const result = await integrateTeam(repoRoot, 'demo', ['worker-1']);
     assert.equal(result.ok, true);
     assert.equal(result.results[0].source_commits.length, 2);
     assert.equal(readFileSync(join(repoRoot, 'one.txt'), 'utf8'), 'one\n');
     assert.equal(readFileSync(join(repoRoot, 'two.txt'), 'utf8'), 'two\n');
-    const repeated = integrateTeam(repoRoot, 'demo', ['worker-1']);
+    const repeated = await integrateTeam(repoRoot, 'demo', ['worker-1']);
     assert.equal(repeated.ok, true);
     assert.equal(repeated.results[0].status, 'already_integrated');
+    writeFileSync(join(workers[0].worktree_path, 'third.txt'), 'third');
+    git(workers[0].worktree_path, ['add', 'third.txt']);
+    git(workers[0].worktree_path, ['commit', '-qm', 'third']);
+    const nextCommit = git(workers[0].worktree_path, ['rev-parse', 'HEAD']).stdout.trim();
+    updateWorkerState(initialized.stateDir, 'worker-1', { commit: nextCommit, integration: null });
+    const incremental = await integrateTeam(repoRoot, 'demo');
+    assert.equal(incremental.ok, true);
+    assert.equal(incremental.results[0].source_commits.length, 1);
+    assert.equal(readFileSync(join(repoRoot, 'third.txt'), 'utf8'), 'third');
     stopTeam(repoRoot, 'demo');
     const cleanup = cleanupTeam(repoRoot, 'demo');
     assert.equal(cleanup.ok, true);
@@ -62,7 +71,7 @@ test('integrates the complete validated worker commit range', () => {
   }
 });
 
-test('invalidates integration evidence after leader history is reset and preserves the worktree', () => {
+test('invalidates integration evidence after leader history is reset and preserves the worktree', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'otx-integration-evidence-'));
   const bucket = join(dirname(repoRoot), basename(repoRoot) + '.otx-worktrees');
   git(repoRoot, ['init', '-q', '-b', 'main']);
@@ -91,7 +100,7 @@ test('invalidates integration evidence after leader history is reset and preserv
     updateWorkerState(initialized.stateDir, 'worker-1', { status: 'completed', commit });
     updateTaskState(initialized.stateDir, '1', { status: 'completed' });
 
-    const integrated = integrateTeam(repoRoot, 'evidence', ['worker-1']);
+    const integrated = await integrateTeam(repoRoot, 'evidence', ['worker-1']);
     assert.equal(integrated.ok, true);
     assert.equal(integrated.results[0].status, 'integrated');
     git(repoRoot, ['reset', '--hard', baseCommit]);
@@ -113,7 +122,7 @@ test('invalidates integration evidence after leader history is reset and preserv
     assert.equal(refused.results[0].status, 'preserved');
     assert.equal(refused.results[0].reason, 'commit_not_integrated');
 
-    const reintegrated = integrateTeam(repoRoot, 'evidence', ['worker-1']);
+    const reintegrated = await integrateTeam(repoRoot, 'evidence', ['worker-1']);
     assert.equal(reintegrated.ok, true);
     assert.equal(reintegrated.results[0].status, 'integrated');
     stopTeam(repoRoot, 'evidence');
@@ -130,7 +139,7 @@ test('invalidates integration evidence after leader history is reset and preserv
   }
 });
 
-test('rolls back the entire integration batch when a later worker conflicts', () => {
+test('rolls back the entire integration batch when a later worker conflicts', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'otx-integration-transaction-'));
   const bucket = join(dirname(repoRoot), basename(repoRoot) + '.otx-worktrees');
   git(repoRoot, ['init', '-q', '-b', 'main']);
@@ -170,7 +179,7 @@ test('rolls back the entire integration batch when a later worker conflicts', ()
       updateTaskState(initialized.stateDir, String(worker.index), { status: 'completed' });
     }
 
-    const result = integrateTeam(repoRoot, 'transaction');
+    const result = await integrateTeam(repoRoot, 'transaction');
     assert.equal(result.ok, false);
     assert.equal(result.rolled_back, true);
     assert.deepEqual(result.results.map((entry) => entry.status), ['rolled_back', 'conflict']);
