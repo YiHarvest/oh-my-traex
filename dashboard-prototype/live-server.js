@@ -1,6 +1,10 @@
+import { snapshotRevision, writeSnapshotEvent, waitForStartup } from './stream-state.js';
+import { verificationPolicy } from '../src/team/verification.js';
+import { teamStateDir, readTeamState } from '../src/team/state.js';
+import { listTeamTransactions } from '../src/team/transaction.js';
 import { readMailbox } from '../src/team/state.js';
 import { createTeamSnapshotReader } from '../src/team/snapshot.js';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
@@ -154,8 +158,9 @@ function openEventStream(request, response) {
     'x-accel-buffering': 'no',
   });
   response.write('retry: 1500\n\n');
+  const snapshot = collectSnapshot();
   clients.add(response);
-  writeEvent(response, 'snapshot', collectSnapshot());
+  writeEvent(response, 'snapshot', snapshot);
   const keepAlive = setInterval(() => response.write(': heartbeat\n\n'), 15_000);
   request.once('close', () => {
     clearInterval(keepAlive);
@@ -172,16 +177,14 @@ function broadcastSnapshot(force) {
     for (const client of clients) writeEvent(client, 'monitor-error', { error: error.message, at: new Date().toISOString() });
     return;
   }
-  const stable = JSON.stringify({ ...snapshot, generated_at: null });
-  const hash = createHash('sha256').update(stable).digest('hex');
+  const hash = snapshotRevision(snapshot);
   if (!force && hash === lastSnapshotHash) return;
   lastSnapshotHash = hash;
   for (const client of clients) writeEvent(client, 'snapshot', snapshot);
 }
 
 function writeEvent(response, event, data) {
-  response.write('event: ' + event + '\n');
-  response.write('data: ' + JSON.stringify(data) + '\n\n');
+  return writeSnapshotEvent(response, event, data);
 }
 
 function runAction(body) {
@@ -228,20 +231,39 @@ function stopDashboardTeam(team) {
   return stopped;
 }
 
-function startTeamFromDashboard(body) {
+async function startTeamFromDashboard(body) {
   const title = requireText(body.title, 'title');
   const workers = Math.max(1, Math.min(6, Number(body.workers) || 3));
   const teamName = body.team ? safeName(body.team, 'team') : 'dashboard-' + Date.now().toString(36).slice(-6);
   const sessionName = 'otx-web-' + teamName;
   const role = body.role ? safeRole(body.role) : null;
+  const checks = verificationPolicy(repoRoot, body.verify_commands || [], body.prepare_commands || []);
+  if ((!role || ['executor', 'test-engineer'].includes(role)) && !checks.commands.length) throw new Error('Provide a verification command for this repository');
+  const stateDir = teamStateDir(repoRoot, teamName);
+  if (existsSync(join(stateDir, 'config.json'))) throw new Error('Team already exists; resume it instead');
   const descriptor = role ? String(workers) + ':' + role : String(workers);
-  const command = [process.execPath, cliPath, 'team', descriptor, '--name', teamName];
+  const command = [process.execPath, cliPath, 'team', ...(role ? [descriptor] : ['--workers', String(workers)]), '--name', teamName];
   if (body.model) command.push('--model', requireText(body.model, 'model'));
   if (body.auto_plan === false) command.push('--no-plan');
+  for (const check of checks.commands) command.push('--verify-command', check);
+  for (const prepare of checks.preparation || []) command.push('--prepare-command', prepare);
   command.push(title);
   const result = spawnSync('tmux', ['new-session', '-d', '-x', '160', '-y', '48', '-s', sessionName, '-c', repoRoot, shellJoin(command)], { encoding: 'utf8' });
   if (result.status !== 0) throw new Error(String(result.stderr || result.stdout || 'Failed to start tmux team.').trim());
-  return { team: teamName, tmux_session: sessionName };
+  await waitForStartup(() => {
+    const transaction = listTeamTransactions(stateDir).find((entry) => entry.operation === 'start-team');
+    if (transaction && ['rolled-back', 'recovered'].includes(transaction.status)) return { status: 'failed', error: transaction.details?.error || 'Startup rolled back' };
+    if (transaction?.status === 'committed' && existsSync(join(stateDir, 'config.json'))) {
+      const state = readTeamState(repoRoot, teamName);
+      const failed = state.workers.find((worker) => worker.status === 'failed');
+      if (failed) return { status: 'failed', error: failed.error || 'Worker startup failed' };
+      if (state.workers.every((worker) => worker.started_at)) return { status: 'ready' };
+    }
+    const live = spawnSync('tmux', ['has-session', '-t', sessionName], { encoding: 'utf8' });
+    if (live.status !== 0) return { status: 'failed', error: 'Team process exited before startup confirmation' };
+    return { status: 'starting' };
+  });
+  return { team: teamName, tmux_session: sessionName, status: 'running' };
 }
 
 function safeRole(value) {

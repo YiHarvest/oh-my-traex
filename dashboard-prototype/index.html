@@ -177,6 +177,8 @@
         <label>Team name <small>optional</small><input id="team-name" name="teamName" autocomplete="off" placeholder="e.g. session-hardening" pattern="[A-Za-z0-9][A-Za-z0-9-]{0,59}"></label>
         <label>Model<select id="task-model" name="model"><option>Seed-2.1-Turbo</option><option>GPT-5.6-Sol</option><option>GPT-5.4</option><option>GPT-5.5</option></select></label>
         <label>Agent count<input id="task-agents" name="agents" type="number" min="1" max="6" value="3"></label>
+        <label>Verification command<input name="verifyCommand" placeholder="npm test (default when available)"></label>
+        <label>Preparation command<input name="prepareCommand" placeholder="Optional dependency setup"></label>
         <label>Planning<select id="task-planning" name="planning"><option value="auto">Structured planner</option><option value="static">Static role lanes</option></select></label>
         <p id="form-error" class="form-error" aria-live="polite"></p>
         <div class="modal-actions"><button type="button" class="secondary-button" data-action="close-modal">Cancel</button><button class="primary-button" type="submit">Create & Run</button></div>

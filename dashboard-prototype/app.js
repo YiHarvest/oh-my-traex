@@ -615,8 +615,8 @@ async function createTask(event) {
   if (!Number.isInteger(count) || count < 1 || count > 6) { elements.formError.textContent = 'Agent count must be between 1 and 6.'; return; }
   if (state.mode === 'live') {
     try {
-      const result = await callAction({ action: 'start-team', team: teamName || undefined, title: name, workers: count, model: String(form.get('model')), auto_plan: form.get('planning') !== 'static' });
-      elements.form.reset(); closeTaskModal(); showToast('Team ' + result.team + ' is starting.');
+      const result = await callAction({ action: 'start-team', team: teamName || undefined, title: name, workers: count, model: String(form.get('model')), auto_plan: form.get('planning') !== 'static', verify_commands: String(form.get('verifyCommand') || '').trim() ? [String(form.get('verifyCommand')).trim()] : [], prepare_commands: String(form.get('prepareCommand') || '').trim() ? [String(form.get('prepareCommand')).trim()] : [] });
+      elements.form.reset(); closeTaskModal(); showToast('Team ' + result.team + ' has started.');
     } catch (error) { elements.formError.textContent = error.message; }
     return;
   }
