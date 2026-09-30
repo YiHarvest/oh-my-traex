@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { teamStatus } from './runtime.js';
 
 export const DEFAULT_HUD_INTERVAL_MS = 1000;
@@ -28,17 +29,26 @@ export async function watchTeamHud(cwd, name, {
   intervalMs = DEFAULT_HUD_INTERVAL_MS, run = spawnSync, signal, output = process.stdout, width = output.columns || 100,
 } = {}) {
   if (!Number.isInteger(intervalMs) || intervalMs < 250) throw new Error('HUD interval must be an integer of at least 250ms.');
+  const env = process.env;
+  const owner = env.OTX_HUD_TEAM === name ? {
+    team: name, runId: env.OTX_HUD_RUN_ID, leader: env.OTX_HUD_LEADER, pane: env.TMUX_PANE, pid: process.pid,
+  } : null;
   let first = true;
   try {
     while (!signal?.aborted) {
-      const frame = buildTeamHud(readTeamHud(cwd, name, { run }), { width });
+      const state = readTeamHud(cwd, name, { run });
+      if (owner && (state.config.run_id !== owner.runId || ['stopped', 'cleaned', 'cleanup_pending'].includes(state.config.status)
+        || !hudLeaderAlive(owner, run))) break;
+      const frame = buildTeamHud(state, { width });
       output.write(`${first ? '\x1b[?25l' : ''}\x1b[H\x1b[2J${frame}\n`);
       first = false;
       if (signal?.aborted) break;
-      await delay(intervalMs, signal);
+      try { await sleep(intervalMs, undefined, { signal }); }
+      catch (error) { if (error.name !== 'AbortError') throw error; }
     }
   } finally {
     if (!first) output.write('\x1b[?25h');
+    if (owner) closeOwnedHud(owner, run);
   }
 }
 
@@ -51,14 +61,14 @@ export function openTeamHud(cwd, name, {
     throw new Error('otx team hud --tmux must be launched from this team leader pane.');
   }
   const marker = '#{pane_id}\t#{@otx_hud_team}\t#{@otx_hud_leader}\t#{@otx_hud_run_id}';
-  const panes = tmux(run, ['list-panes', '-t', env.TMUX_PANE, '-F', marker]).stdout.trim().split(/\r?\n/);
+  const panes = tmux(run, ['list-panes', '-a', '-F', marker]).stdout.trim().split(/\r?\n/);
   for (const line of panes) {
     const [paneId, team, leader, runId] = line.split('\t');
     if (paneId?.startsWith('%') && team === name && leader === env.TMUX_PANE && runId === state.config.run_id) {
       return { pane_id: paneId, reused: true };
     }
   }
-  const command = shellJoin([process.execPath, cliPath, 'team', 'hud', name, '-C', cwd, '--watch', '--interval-ms', String(intervalMs)]);
+  const command = 'exec ' + shellJoin(['env', 'OTX_HUD_TEAM=' + name, 'OTX_HUD_RUN_ID=' + state.config.run_id, 'OTX_HUD_LEADER=' + env.TMUX_PANE, process.execPath, cliPath, 'team', 'hud', name, '-C', cwd, '--watch', '--interval-ms', String(intervalMs)]);
   const split = tmux(run, [
     'split-window', '-v', '-l', String(Math.min(8, Math.max(3, state.workers.length + 2))),
     '-d', '-P', '-F', '#{pane_id}', '-t', env.TMUX_PANE, '-c', cwd, command,
@@ -106,9 +116,22 @@ function shellJoin(parts) {
   return parts.map((value) => /^[a-zA-Z0-9_./:=+-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\"'\"'")}'`).join(' ');
 }
 
-function delay(ms, signal) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
-  });
+// Query the complete server so moving the leader to another window is safe.
+// Query failures and malformed snapshots are unknown, not proof of exit.
+export function hudLeaderAlive(owner, run = spawnSync) {
+  const result = run('tmux', ['list-panes', '-a', '-F', '#{pane_id}\t#{pane_dead}'], { encoding: 'utf8', timeout: 1000 });
+  if (result.status !== 0 || result.error) return true;
+  const rows = result.stdout.trim().split(/\r?\n/);
+  if (!rows.every((row) => /^%\d+\t[01]$/.test(row)) || !rows.includes(owner.pane + '\t0')) return true;
+  return rows.includes(owner.leader + '\t0');
+}
+
+export function closeOwnedHud(owner, run = spawnSync) {
+  if (!/^%\d+$/.test(owner.pane || '') || owner.pane === owner.leader) return false;
+  const result = run('tmux', ['display-message', '-p', '-t', owner.pane,
+    '#{@otx_hud_team}\t#{@otx_hud_leader}\t#{@otx_hud_run_id}\t#{pane_pid}'], { encoding: 'utf8', timeout: 1000 });
+  if (result.status !== 0 || result.error) return false;
+  const expected = [owner.team, owner.leader, owner.runId, String(owner.pid)].join('\t');
+  if (result.stdout.trim() !== expected) return false;
+  return run('tmux', ['kill-pane', '-t', owner.pane], { encoding: 'utf8', timeout: 1000 }).status === 0;
 }
