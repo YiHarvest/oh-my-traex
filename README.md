@@ -238,3 +238,5 @@ CI 在 Linux、macOS、Windows（Node.js 22）以及 Linux Node.js 24 上运行�
 metrics 和 Dashboard 的 metrics.usage 汇总 worker 实际 turn.completed 事件中的 input_tokens、cached_input_tokens 和 output_tokens。没有 usage 时显示 null。可用 --model-prices prices.json 提供每百万 token 的 USD 单价，格式为 {"模型名":{"input_per_million":2,"cached_input_per_million":1,"output_per_million":5}}。缺少模型或价格时费用为 null；估算仅覆盖已收到 usage 的 worker，不包含 leader、planner 或后端未报告的子 Agent 用量。
 
 验证命令现在异步执行，保持续租并响应 stop。可重复指定 --prepare-command 配置环境准备；未显式配置时，有 package-lock.json 且缺少 node_modules 的工作区自动执行 npm ci，使用 npm 自带缓存。准备失败与测试失败分别记录。集成通过 Git 补丁等价性跳过已合入提交，支持同一 worker 多次交付；验证期间停止 Team 会取消集成并保留 leader HEAD。
+
+Dashboard 创建 Team 时支持验证与准备命令，并等待 worker 实际启动后确认成功；缺失配置和启动回滚会显示错误。SSE 快照按业务状态去重，忽略嵌套采集时间；慢客户端超过 1 MiB 写缓冲会断开并通过浏览器重连恢复最新快照。
