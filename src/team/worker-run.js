@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { inspectWriteOwnership } from './ownership.js';
 import { runVerification } from './verification.js';
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -54,9 +55,10 @@ const committed = Boolean(commitSha && commitSha !== initialState.base_commit);
 const clean = dirty.status === 0 && dirty.stdout.trim() === '';
 const hasResult = existsSync(resultPath) && statSync(resultPath).size > 0;
 const commitSatisfied = initialState.requires_commit ? committed : true;
+const ownership = inspectWriteOwnership(worktreePath, initialState.base_commit, commitSha, initialState.file_paths);
 const verification = exitCode === 0 && commitSatisfied && clean && hasResult && initialState.requires_commit && verificationPolicy
   ? runVerification(worktreePath, verificationPolicy) : null;
-const finalStatus = exitCode === 0 && commitSatisfied && clean && hasResult && verification?.passed !== false ? 'completed' : 'failed';
+const finalStatus = ownership.passed && exitCode === 0 && commitSatisfied && clean && hasResult && verification?.passed !== false ? 'completed' : 'failed';
 const currentState = JSON.parse(readFileSync(join(stateDir, 'workers', workerName + '.json'), 'utf8'));
 if (currentState.status === 'cancelled') {
   process.stdout.write(`\n[otx] ${workerName} cancelled by leader.\n`);
@@ -71,15 +73,15 @@ const initialError = finalStatus === 'failed'
       ? 'worker produced no commit'
       : !clean
         ? 'worker worktree is dirty after completion'
-        : verification?.error || 'worker produced no result'
+        : ownership.error || verification?.error || 'worker produced no result'
   : null;
 const initialCompletion = completeWorkerTurn(stateDir, {
   workerName, taskId: initialTaskId, taskToken: initialClaim.token,
   taskUpdates: {
-    verification, status: finalStatus, completed_at: initialCompletedAt, commit: commitSha, result_path: resultPath, error: initialError,
+    ownership, verification, status: finalStatus, completed_at: initialCompletedAt, commit: commitSha, result_path: resultPath, error: initialError,
   },
   workerUpdates: {
-    verification, status: finalStatus, exit_code: exitCode, completed_at: initialCompletedAt, commit: commitSha, error: initialError,
+    ownership, verification, status: finalStatus, exit_code: exitCode, completed_at: initialCompletedAt, commit: commitSha, error: initialError,
   },
 });
 const persistedInitialStatus = initialCompletion.ok ? finalStatus : 'failed';
@@ -147,9 +149,10 @@ while (true) {
     : null;
   const followupCommitSatisfied = followupTask?.requires_commit ? followupCommitSha !== followupBaseCommit : true;
   const followupHasResult = existsSync(followupPath) && statSync(followupPath).size > 0;
+  const followupOwnership = inspectWriteOwnership(worktreePath, followupBaseCommit, followupCommitSha, followupStartState.file_paths);
   const followupVerification = followupExit === 0 && followupCommitSatisfied && followupHasResult && followupStartState.requires_commit && verificationPolicy
     ? runVerification(worktreePath, verificationPolicy) : null;
-  const followupStatus = followupVerification?.passed !== false && followupExit === 0
+  const followupStatus = followupOwnership.passed && followupVerification?.passed !== false && followupExit === 0
     && followupDirty.status === 0
     && followupDirty.stdout.trim() === ''
     && followupCommitSatisfied
@@ -160,22 +163,22 @@ while (true) {
     ? followupExit !== 0 ? `follow-up exited ${followupExit}`
       : !followupCommitSatisfied ? 'follow-up task produced no commit'
         : !followupHasResult ? 'follow-up produced no result'
-          : followupVerification?.error || 'follow-up worktree is dirty'
+          : followupOwnership.error || followupVerification?.error || 'follow-up worktree is dirty'
     : null;
   const completedAt = new Date().toISOString();
   const completion = completeWorkerTurn(stateDir, {
     workerName, messageId: message.id, taskId: message.task_id,
     taskToken: taskClaim?.token, receiptToken,
     taskUpdates: {
-      verification: followupVerification, status: followupStatus, completed_at: completedAt, commit: followupCommitSha,
+      ownership: followupOwnership, verification: followupVerification, status: followupStatus, completed_at: completedAt, commit: followupCommitSha,
       result_path: followupPath, error: followupError,
     },
     messageUpdates: {
-      verification: followupVerification, status: followupStatus, completed_at: completedAt, result_path: followupPath,
+      ownership: followupOwnership, verification: followupVerification, status: followupStatus, completed_at: completedAt, result_path: followupPath,
       commit: followupCommitSha, error: followupError,
     },
     workerUpdates: {
-      verification: followupVerification,
+      ownership: followupOwnership, verification: followupVerification,
       status: followupStatus,
       current_message_id: null,
       current_task_id: null,
