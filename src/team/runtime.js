@@ -12,7 +12,7 @@ import { buildLeaderPrompt, buildWorkerPrompt } from './prompt.js';
 import { planTeam } from './planner.js';
 import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reassignTeamTask, recoverDeliveryTransactions, removeTeamWorker, sanitizeTeamName, teamStateDir, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState, withStateLock } from './state.js';
 import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktree, createWorkerWorktrees, inspectWorkerWorktree, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
-import { beginTeamTransaction, finishTeamTransaction, listTeamTransactions, updateTeamTransaction } from './transaction.js';
+import { beginTeamTransaction, recoverOwnedTransaction, finishTeamTransaction, listTeamTransactions, updateTeamTransaction } from './transaction.js';
 import { appendTeamEvent, listTeamEvents } from './events.js';
 import { createMuxAdapter, inspectRuntimeOwnership, terminateOwnedRuntime } from './mux.js';
 import { permissionArgs, TRAE_WORKER_SANDBOX } from './trae.js';
@@ -701,7 +701,7 @@ export function recoverTeam(cwd, name, run = spawnSync) {
   const cleanupDebt = [];
   let requiresAttention = false;
   for (const record of transactions) {
-    const transaction = { stateDir, id: record.id, record };
+    const didRecover = recoverOwnedTransaction(stateDir, record.id, (record) => {
     const resources = dedupeWorkers(record.resources?.workers || []);
     for (const resource of resources) {
       const persisted = state?.workers.find((worker) => worker.name === resource.name);
@@ -726,10 +726,11 @@ export function recoverTeam(cwd, name, run = spawnSync) {
       }
     }
     if (record.operation === 'start-team' || transactionCleanupDebt.length > 0) requiresAttention = true;
-    finishTeamTransaction(transaction, 'recovered', { cleanup_debt: transactionCleanupDebt });
-    recovered.push(record.id);
+    return { cleanup_debt: transactionCleanupDebt };
+    });
+    if (didRecover) recovered.push(record.id);
   }
-  if (state) updateTeamConfig(stateDir, {
+  if (state && recovered.length) updateTeamConfig(stateDir, {
     status: requiresAttention ? 'recovery_required' : state.config.status,
     recovered_at: new Date().toISOString(),
     cleanup_debt: cleanupDebt,

@@ -4,9 +4,9 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { addTeamWorker, initTeamState, readTeamState, teamStateDir } from '../src/team/state.js';
+import { addTeamWorker, initTeamState, readTeamState, teamStateDir, writeJsonAtomic } from '../src/team/state.js';
 import { addWorker, recoverTeam } from '../src/team/runtime.js';
-import { beginTeamTransaction, finishTeamTransaction, listTeamTransactions, updateTeamTransaction } from '../src/team/transaction.js';
+import { beginTeamTransaction, finishTeamTransaction, listTeamTransactions, transactionOwnerExited, updateTeamTransaction } from '../src/team/transaction.js';
 import { createWorkerWorktree } from '../src/team/worktree.js';
 
 test('persists transaction phases and terminal status', () => {
@@ -41,6 +41,7 @@ test('recovers an interrupted add-worker transaction idempotently', () => {
     const transaction = beginTeamTransaction(initialized.stateDir, 'add-worker', { worker: second.name });
     updateTeamTransaction(transaction, { phase: 'worktree-created', resources: { workers: [second] } });
 
+    markOwnerExited(transaction);
     const firstRecovery = recoverTeam(repo, 'demo', () => ({ status: 1, stdout: '', stderr: 'missing' }));
     assert.equal(firstRecovery.ok, true);
     assert.equal(firstRecovery.recovered.length, 1);
@@ -68,6 +69,7 @@ test('recovers an interrupted start-team before config publication', () => {
     });
     updateTeamTransaction(transaction, { phase: 'worktrees-created', resources: { workers: [worker] } });
 
+    markOwnerExited(transaction);
     const recovery = recoverTeam(repo, 'demo');
     assert.equal(recovery.ok, true);
     assert.equal(recovery.recovered.length, 1);
@@ -101,4 +103,31 @@ test('rolls back add-worker transaction when worktree creation fails', () => {
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+function markOwnerExited(transaction) {
+  writeJsonAtomic(join(transaction.stateDir, 'transactions', transaction.id + '.json'), {
+    ...transaction.record, owner: { ...transaction.record.owner, pid: 99999999 },
+  });
+}
+test('does not reclaim live or indeterminate owners and fences PID reuse', () => {
+  const record = { owner: { pid: 123, identity: 'birth-1' } };
+  assert.equal(transactionOwnerExited(record, { kill() {}, identity: () => 'birth-1' }), false);
+  assert.equal(transactionOwnerExited(record, { kill() {}, identity: () => null }), false);
+  assert.equal(transactionOwnerExited(record, { kill() {}, identity: () => 'birth-2' }), true);
+  assert.equal(transactionOwnerExited({}), false);
+});
+test('recovery skips an active owner and cannot overwrite a completed transaction', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'otx-live-owner-'));
+  try {
+    spawnSync('git', ['init', '-q'], { cwd: repo });
+    const stateDir = teamStateDir(repo, 'demo');
+    const transaction = beginTeamTransaction(stateDir, 'start-team');
+    assert.throws(() => beginTeamTransaction(stateDir, 'start-team'), /already exists/);
+    assert.equal(recoverTeam(repo, 'demo').recovered.length, 0);
+    assert.equal(listTeamTransactions(stateDir)[0].status, 'active');
+    finishTeamTransaction(transaction);
+    assert.throws(() => updateTeamTransaction(transaction, { phase: 'late' }), /status changed/);
+    assert.equal(recoverTeam(repo, 'demo').recovered.length, 0);
+  } finally { rmSync(repo, { recursive: true, force: true }); }
 });
