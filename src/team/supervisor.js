@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask } from './state.js';
 import { reconcileTeam, recoverTeam } from './runtime.js';
 import { appendTeamEvent } from './events.js';
@@ -6,6 +7,11 @@ import { appendTeamEvent } from './events.js';
 export const DEFAULT_SUPERVISOR_INTERVAL_MS = 1000;
 
 export function superviseTeamOnce(cwd, name, run = spawnSync) {
+  const current = readTeamState(cwd, name);
+  if (isTerminal(current.config.status)) return {
+    state: current, recovered_transactions: [], recovered_deliveries: [],
+    cleanup_debt: [], reclaimed_tasks: [], reclaimed_messages: [],
+  };
   const recovery = recoverTeam(cwd, name, run);
   const before = readTeamState(cwd, name);
   const reclaimedTasks = [];
@@ -65,21 +71,12 @@ export async function runTeamSupervisor(cwd, name, {
   while (!signal?.aborted) {
     last = superviseTeamOnce(cwd, name, run);
     if (once || isTerminal(last.state.config.status)) return last;
-    await delay(intervalMs, signal);
+    try { await sleep(intervalMs, undefined, { signal }); }
+    catch (error) { if (error.name !== 'AbortError') throw error; }
   }
   return last;
 }
 
 function isTerminal(status) {
-  return ['ready', 'failed', 'integrated', 'stopped', 'cleaned', 'cleanup_pending'].includes(status);
-}
-
-function delay(ms, signal) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    if (signal) signal.addEventListener('abort', () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
+  return ['stopped', 'cleaned', 'cleanup_pending'].includes(status);
 }

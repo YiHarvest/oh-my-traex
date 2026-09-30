@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { acknowledgeMailboxMessage, claimTeamTask, enqueueMailboxMessage, initTeamState, readMailbox, readTeamState, updateMailboxMessage, updateTaskState, updateWorkerState } from '../src/team/state.js';
+import { acknowledgeMailboxMessage, claimTeamTask, enqueueMailboxMessage, initTeamState, readMailbox, readTeamState, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState } from '../src/team/state.js';
 import { runTeamSupervisor, superviseTeamOnce } from '../src/team/supervisor.js';
 import { startTeam } from '../src/team/runtime.js';
 import { rollbackWorkerWorktrees } from '../src/team/worktree.js';
@@ -106,4 +106,46 @@ test('one-shot supervisor returns without waiting', async () => {
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+
+test('supervisor stays alive through ready and reopened work until explicit stop', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-supervisor-reopen-'));
+  const controller = new AbortController();
+  let checks = 0;
+  try {
+    spawnSync('git', ['init', '-q'], { cwd });
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task',
+      leaderPaneId: '%1', leaderSessionId: 'leader', workers: [
+        { name: 'worker-1', index: 1, role: 'reviewer', status: 'completed', requires_commit: false, worktree_path: cwd },
+      ] });
+    updateTaskState(stateDir, '1', { status: 'completed' });
+    const timer = setInterval(() => {
+      const state = readTeamState(cwd, 'demo');
+      if (state.config.status !== 'ready') return;
+      checks++;
+      if (checks === 1) updateTeamConfig(stateDir, { status: 'running' }, { allowTerminalReset: true, reason: 'new work' });
+      else updateTeamConfig(stateDir, { status: 'stopped' });
+    }, 25);
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const result = await runTeamSupervisor(cwd, 'demo', { intervalMs: 100, signal: controller.signal,
+        run: () => ({ status: 1, stdout: '', stderr: 'missing' }) });
+      assert.equal(result.state.config.status, 'stopped');
+      assert.equal(checks, 2);
+    } finally { clearInterval(timer); clearTimeout(timeout); }
+  } finally { controller.abort(); rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('stopped supervisor does not recover or reclaim persisted tasks', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-supervisor-stopped-'));
+  try {
+    spawnSync('git', ['init', '-q'], { cwd });
+    const { stateDir } = initTeamState({ cwd, name: 'demo', task: 'task',
+      leaderPaneId: '%1', leaderSessionId: 'leader', workers: [] });
+    updateTeamConfig(stateDir, { status: 'stopped' });
+    const result = superviseTeamOnce(cwd, 'demo', () => { throw new Error('must not inspect processes'); });
+    assert.equal(result.state.config.status, 'stopped');
+    assert.deepEqual(result.reclaimed_tasks, []);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
