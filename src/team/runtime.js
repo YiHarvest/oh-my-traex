@@ -1,3 +1,4 @@
+import { verificationPolicy, runVerification, verificationCurrent } from './verification.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,7 +15,7 @@ import { appendTeamEvent, listTeamEvents } from './events.js';
 import { createMuxAdapter, inspectRuntimeOwnership, terminateOwnedRuntime } from './mux.js';
 import { permissionArgs, TRAE_WORKER_SANDBOX } from './trae.js';
 
-export async function startTeam({ cwd, task, workerCount, model, teamName, baseRole, autoPlan = true, plannerTimeoutMs, muxBackend = 'tmux', env = process.env, run = spawnSync, spawnProcess = spawn }) {
+export async function startTeam({ cwd, task, workerCount, model, verifyCommands, teamName, baseRole, autoPlan = true, plannerTimeoutMs, muxBackend = 'tmux', env = process.env, run = spawnSync, spawnProcess = spawn }) {
   if (muxBackend === 'tmux' && (!env.TMUX || !env.TMUX_PANE)) throw new Error('otx team requires running inside tmux unless --headless is used.');
   const name = teamName ? sanitizeTeamName(teamName) : defaultTeamName(task);
   const roles = ['executor', 'test-engineer', 'reviewer', 'explorer', 'architect'];
@@ -30,6 +31,7 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
   if (repoRootResult.status !== 0) throw new Error('otx team requires a Git repository.');
   const repoRoot = repoRootResult.stdout.trim();
   assertCleanWorkspace(repoRoot);
+  const verification = verificationPolicy(repoRoot, verifyCommands);
   assertTeamDoesNotExist(repoRoot, name);
   const statePath = teamStateDir(repoRoot, name);
   const transaction = beginTeamTransaction(statePath, 'start-team', { team: name, cwd: repoRoot });
@@ -45,6 +47,10 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       plannerFallback = error.message;
       planningMode = 'fallback';
     }
+  }
+  if (workers.some((worker) => worker.requires_commit) && !verification.commands.length) {
+    finishTeamTransaction(transaction, 'rolled-back', { error: 'verification commands required' });
+    throw new Error('writing teams require --verify-command when package.json has no test script');
   }
   let worktreeWorkers = [];
   try {
@@ -64,6 +70,7 @@ export async function startTeam({ cwd, task, workerCount, model, teamName, baseR
       task,
       model,
       plan,
+      verification,
       planningMode,
       plannerFallback,
       leaderPaneId: muxBackend === 'tmux' ? env.TMUX_PANE : `process:${process.pid}`,
@@ -474,6 +481,9 @@ function integrateTeamLocked(cwd, name, workerNames, run) {
       results.push({ ...worker.integration, status: 'already_integrated' });
       continue;
     }
+    if (state.config.verification && !verificationCurrent(worker.verification, worker.commit, state.config.verification)) {
+      throw new Error('missing or stale verification evidence: ' + worker.name);
+    }
     if (worker.status !== 'completed') throw new Error(`worker is not completed: ${worker.name}`);
     if (worker.dirty) throw new Error(`worker worktree is dirty: ${worker.name}`);
     if (!worker.commit || worker.commit === worker.base_commit) throw new Error(`worker has no new commit: ${worker.name}`);
@@ -528,6 +538,14 @@ function integrateTeamLocked(cwd, name, workerNames, run) {
         results.push({ worker: worker.name, commit: worker.commit, source_commits: sourceCommits, status: 'staged' });
       }
       const stagedHead = run('git', ['rev-parse', 'HEAD'], { cwd: stagingPath, encoding: 'utf8' }).stdout.trim();
+      if (state.config.verification) {
+        const verification = runVerification(stagingPath, state.config.verification, run);
+        updateTeamConfig(state.stateDir, { integration_verification: verification });
+        if (!verification.passed) {
+          updateTeamConfig(state.stateDir, { status: 'integration_failed' });
+          return { ok: false, rolled_back: true, verification, results: results.map((entry) => entry.status === 'staged' ? { ...entry, status: 'rolled_back' } : entry) };
+        }
+      }
       const currentHead = run('git', ['rev-parse', 'HEAD'], { cwd: state.config.cwd, encoding: 'utf8' }).stdout.trim();
       const currentStatus = run('git', ['status', '--porcelain'], { cwd: state.config.cwd, encoding: 'utf8' });
       if (currentHead !== originalHead || currentStatus.status !== 0 || currentStatus.stdout.trim()) {
@@ -605,6 +623,9 @@ function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env
     requires_commit: ['executor', 'test-engineer'].includes(role),
     status: 'starting',
   };
+  if (workerBase.requires_commit && state.config.verification && !state.config.verification.commands.length) {
+    throw new Error('team has no verification command for a writing worker');
+  }
   const transaction = beginTeamTransaction(state.stateDir, 'add-worker', { team: name, worker: workerBase.name });
   let worker;
   let task;
