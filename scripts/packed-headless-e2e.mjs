@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const projectRoot = new URL('..', import.meta.url);
 const root = mkdtempSync(join(tmpdir(), 'otx-packed-headless-'));
@@ -11,6 +10,9 @@ const installRoot = join(root, 'install');
 const repo = join(root, 'repo');
 const binDir = join(root, 'bin');
 const cache = join(root, 'npm-cache');
+const stateDir = join(repo, '.git', 'otx', 'team', 'headless');
+let runtimeEnv;
+let failure;
 const npmCli = process.env.npm_execpath;
 if (!npmCli) throw new Error('packed headless E2E must be started through npm');
 
@@ -34,8 +36,9 @@ try {
   run('git', ['commit', '--allow-empty', '-qm', 'base'], { cwd: repo });
 
   const env = { ...process.env, ...fixtureEnv, PATH: `${binDir}${delimiter}${process.env.PATH || ''}` };
+  runtimeEnv = env;
   run(otx, [otxEntry, 'team', '1:reviewer', '--headless', '--no-plan', '--name', 'headless', '-C', repo, 'packed headless runtime'], { env });
-  const stateDir = join(repo, '.git', 'otx', 'team', 'headless');
+
   await waitFor(() => readWorker(stateDir).status === 'completed', 'headless worker');
 
   const config = readJson(join(stateDir, 'config.json'));
@@ -54,8 +57,25 @@ try {
   assert.equal(readJson(join(stateDir, 'config.json')).status, 'cleaned', 'packed headless cleanup did not finalize state');
   assert.equal(existsSync(worker.worktree_path), false, 'packed headless cleanup left its worker worktree behind');
   process.stdout.write(`packed headless E2E passed on ${process.platform}\n`);
+} catch (error) {
+  failure = error;
+  throw error;
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  try {
+    if (runtimeEnv && existsSync(join(stateDir, 'config.json'))) {
+      const config = readJson(join(stateDir, 'config.json'));
+      const worker = readWorker(stateDir);
+      if (config.status !== 'cleaned') run(process.execPath, [
+        join(installRoot, 'node_modules', 'oh-my-traex', 'src', 'cli.js'),
+        'team', 'stop', 'headless', '-C', repo, '--json',
+      ], { env: runtimeEnv });
+      await waitFor(() => !processAlive(worker.pane_pid) && !processAlive(config.supervisor_pane_pid), 'fixture shutdown');
+    }
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (cleanupError) {
+    if (!failure) throw cleanupError;
+    console.error('Fixture cleanup failed; original failure follows:', cleanupError.message);
+  }
 }
 
 function installFakeTraex(directory) {
@@ -88,9 +108,31 @@ if (isFixtureProcess) {
 `, 'utf8');
 
   if (process.platform === 'win32') {
-    copyFileSync(process.execPath, join(directory, 'traex.exe'));
-    const importOption = `--import=${pathToFileURL(fixture).href}`;
-    return { NODE_OPTIONS: [process.env.NODE_OPTIONS, importOption].filter(Boolean).join(' ') };
+    const source = join(directory, 'FakeTraex.cs');
+    writeFileSync(source, `
+using System;
+using System.IO;
+public class FakeTraex {
+  public static void Main(string[] args) {
+    if (Array.IndexOf(args, "--help") >= 0) {
+      Console.WriteLine("Commands: resume app-server --json --sandbox --permission-mode --session-id --output-last-message --config --remote-auth-token-env");
+      return;
+    }
+    if (args.Length == 0 || args[0] != "exec") return;
+    int i = Array.IndexOf(args, "--output-last-message");
+    Console.WriteLine("{\\"type\\":\\"thread.started\\",\\"thread_id\\":\\"fake-windows\\"}");
+    if (i >= 0 && i + 1 < args.Length) {
+      Directory.CreateDirectory(Path.GetDirectoryName(args[i + 1]));
+      File.WriteAllText(args[i + 1], "packed headless fixture completed");
+    }
+  }
+}
+`, 'utf8');
+    const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
+    run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      'Add-Type -Path ' + quote(source) + ' -OutputAssembly ' + quote(join(directory, 'traex.exe')) + ' -OutputType ConsoleApplication',
+    ]);
+    return {};
   }
   const launcher = join(directory, 'traex');
   writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${fixture}" "$@"\n`, 'utf8');
