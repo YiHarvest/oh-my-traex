@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { verificationPolicy, runVerification, verificationCurrent } from '../src/team/verification.js';
-import { initTeamState, updateWorkerState } from '../src/team/state.js';
+import { initTeamState, updateTaskState, updateWorkerState } from '../src/team/state.js';
 import { createWorkerWorktrees } from '../src/team/worktree.js';
 import { integrateTeam } from '../src/team/runtime.js';
 import { parseTeamArgs } from '../src/team/cli.js';
@@ -64,6 +64,7 @@ test('staging validation failure leaves leader HEAD unchanged even when each wor
       const evidence = runVerification(worker.worktree_path, policy);
       assert.equal(evidence.passed, true);
       updateWorkerState(stateDir, worker.name, { status: 'completed', commit, verification: evidence });
+      updateTaskState(stateDir, String(worker.index), { status: 'completed' });
     }
     const before = git(cwd, 'rev-parse', 'HEAD');
     const result = integrateTeam(cwd, 'verify');
