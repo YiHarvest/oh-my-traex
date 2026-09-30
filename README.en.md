@@ -240,3 +240,7 @@ Metrics and Dashboard metrics.usage aggregate observed worker turn.completed inp
 Verification runs asynchronously with heartbeat renewal and stop cancellation. Repeated --prepare-command options configure environment setup. By default, a package-lock.json with no node_modules triggers npm ci using npm's cache. Preparation and test failures are recorded separately. Integration skips patch-equivalent commits already on the leader, supports successive worker deliveries, and cancels publication when stopped during verification.
 
 Dashboard launch accepts verification/preparation commands and waits for actual worker startup before reporting success. Missing configuration and rolled-back launches surface errors. SSE revisions ignore nested collection clocks, and clients exceeding a 1 MiB write buffer disconnect and reconnect for a fresh snapshot.
+
+### Usage ledger and budget
+
+Immutable worker usage records survive worker removal. Deduplication uses worker/execution/backend event ID, falling back to ordinal within the execution. Reported and requested models are separate; reported models take pricing precedence. --max-tokens N limits observed input plus output tokens: new dispatch is rejected at the limit and supervision stops the Team. This is a turn-boundary observed budget, so concurrent requests can overshoot; leader/planner and unreported usage are excluded. Duplicate ID-less events within one stream cannot be reliably distinguished.

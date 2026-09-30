@@ -1,3 +1,4 @@
+import { assertBudgetAvailable, budgetStatus } from './usage-ledger.js';
 import { selectWorkerModel } from './models.js';
 import { inspectWriteOwnership } from './ownership.js';
 import { verificationPolicy, runVerification, verificationCurrent } from './verification.js';
@@ -17,7 +18,8 @@ import { appendTeamEvent, listTeamEvents } from './events.js';
 import { createMuxAdapter, inspectRuntimeOwnership, terminateOwnedRuntime } from './mux.js';
 import { permissionArgs, TRAE_WORKER_SANDBOX } from './trae.js';
 
-export async function startTeam({ cwd, task, workerCount, model, roleModels = {}, modelPrices = {}, verifyCommands, prepareCommands, teamName, baseRole, autoPlan = true, plannerTimeoutMs, muxBackend = 'tmux', env = process.env, run = spawnSync, spawnProcess = spawn }) {
+export async function startTeam({ cwd, task, workerCount, model, roleModels = {}, modelPrices = {}, maxTokens, verifyCommands, prepareCommands, teamName, baseRole, autoPlan = true, plannerTimeoutMs, muxBackend = 'tmux', env = process.env, run = spawnSync, spawnProcess = spawn }) {
+  if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens < 1)) throw new Error('maxTokens must be a positive integer');
   if (muxBackend === 'tmux' && (!env.TMUX || !env.TMUX_PANE)) throw new Error('otx team requires running inside tmux unless --headless is used.');
   const name = teamName ? sanitizeTeamName(teamName) : defaultTeamName(task);
   const roles = ['executor', 'test-engineer', 'reviewer', 'explorer', 'architect'];
@@ -74,7 +76,7 @@ export async function startTeam({ cwd, task, workerCount, model, roleModels = {}
       model,
       plan,
       verification,
-      roleModels, modelPrices,
+      roleModels, modelPrices, maxTokens,
       planningMode,
       plannerFallback,
       leaderPaneId: muxBackend === 'tmux' ? env.TMUX_PANE : `process:${process.pid}`,
@@ -337,6 +339,7 @@ export function stopTeam(cwd, name, run = spawnSync) {
 
 export function sendTeamMessage(cwd, name, workerName, message) {
   const state = teamStatus(cwd, name);
+  assertBudgetAvailable(state.stateDir, state.config);
   const worker = state.workers.find((candidate) => candidate.name === workerName);
   if (!worker) throw new Error(`worker not found: ${workerName}`);
   if (!worker.pane_alive) throw new Error(`worker is not running: ${workerName}`);
@@ -352,6 +355,7 @@ export function sendTeamMessage(cwd, name, workerName, message) {
 
 export function broadcastTeamMessage(cwd, name, message) {
   const state = teamStatus(cwd, name);
+  assertBudgetAvailable(state.stateDir, state.config);
   const workers = state.workers.filter((worker) => worker.pane_alive);
   if (workers.length === 0) throw new Error(`team has no running workers: ${name}`);
   const messages = workers.map((worker) => {
@@ -410,6 +414,7 @@ export function diagnoseTeam(cwd, name) {
 
 export function assignTeamTask(cwd, name, workerName, description, dependsOn = []) {
   const state = teamStatus(cwd, name);
+  assertBudgetAvailable(state.stateDir, state.config);
   const worker = state.workers.find((candidate) => candidate.name === workerName);
   if (!worker) throw new Error(`worker not found: ${workerName}`);
   if (!worker.pane_alive) throw new Error(`worker is not running: ${workerName}`);
@@ -436,6 +441,7 @@ export function assignTeamTask(cwd, name, workerName, description, dependsOn = [
 }
 
 function rescheduleFailedTasks(state, run) {
+  if (budgetStatus(state.stateDir, state.config).exceeded) return [];
   return withStateLock(state.stateDir, 'scheduler', () => {
     const current = readTeamState(state.config.cwd, state.config.name);
     const liveWorkers = current.workers.filter((worker) => paneOwnedBy(run, worker, current.config)
@@ -634,6 +640,7 @@ export function addWorker(cwd, name, role, assignment, options = {}) {
 
 function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env, run = spawnSync, spawnProcess = spawn } = {}) {
   const state = teamStatus(cwd, name, run);
+  assertBudgetAvailable(state.stateDir, state.config);
   const muxBackend = state.config.mux_backend || 'tmux';
   if (muxBackend === 'tmux' && (!env.TMUX || !env.TMUX_PANE)) throw new Error('otx team add-worker requires running inside tmux for the tmux backend.');
   const mux = createMuxAdapter({ backend: muxBackend, run, spawnProcess, leaderPaneId: env.TMUX_PANE });

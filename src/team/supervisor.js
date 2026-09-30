@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { listTeamTasks, readMailbox, readTeamState, reclaimExpiredMailboxDelivery, reclaimExpiredTask } from './state.js';
-import { reconcileTeam, recoverTeam } from './runtime.js';
+import { budgetStatus } from './usage-ledger.js';
+import { reconcileTeam, recoverTeam, stopTeam } from './runtime.js';
 import { appendTeamEvent } from './events.js';
 
 export const DEFAULT_SUPERVISOR_INTERVAL_MS = 1000;
@@ -12,6 +13,11 @@ export function superviseTeamOnce(cwd, name, run = spawnSync) {
     state: current, recovered_transactions: [], recovered_deliveries: [],
     cleanup_debt: [], reclaimed_tasks: [], reclaimed_messages: [],
   };
+  if (budgetStatus(current.stateDir, current.config).exceeded) {
+    stopTeam(cwd, name, run);
+    appendTeamEvent(current.stateDir, 'team.budget_exhausted', { data: budgetStatus(current.stateDir, current.config) });
+    return superviseTeamOnce(cwd, name, run);
+  }
   const recovery = recoverTeam(cwd, name, run);
   const before = readTeamState(cwd, name);
   const reclaimedTasks = [];

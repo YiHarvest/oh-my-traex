@@ -47,7 +47,7 @@ export function assertTeamDoesNotExist(cwd, name) {
   }
 }
 
-export function initTeamState({ cwd, name, task, model, plan, verification, roleModels, modelPrices, planningMode, plannerFallback, leaderPaneId, leaderSessionId, muxBackend = 'tmux', workers }) {
+export function initTeamState({ cwd, name, task, model, plan, verification, roleModels, modelPrices, maxTokens, planningMode, plannerFallback, leaderPaneId, leaderSessionId, muxBackend = 'tmux', workers }) {
   const stateDir = teamStateDir(cwd, name);
   if (existsSync(join(stateDir, 'config.json'))) throw new Error(`team already exists: ${name}`);
   mkdirSync(join(stateDir, 'workers'), { recursive: true });
@@ -63,6 +63,7 @@ export function initTeamState({ cwd, name, task, model, plan, verification, role
     verification: verification || null,
     role_models: roleModels || {},
     model_prices: modelPrices || {},
+    max_tokens: maxTokens ?? null,
     planning_mode: planningMode || 'static',
     planner_fallback: plannerFallback || null,
     cwd: resolve(cwd),
