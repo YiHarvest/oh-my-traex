@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { addUsage } from './usage.js';
+import { recordUsage, assertBudgetAvailable } from './usage-ledger.js';
 import { inspectWriteOwnership } from './ownership.js';
 import { runVerification } from './verification.js';
 
@@ -24,6 +24,7 @@ let activeClaim = { taskId: initialTaskId, token: initialClaim.token };
 let activeDelivery = null;
 updateWorkerState(stateDir, workerName, { status: 'working', blocked_task_ids: [] });
 
+let executionId = 'initial:' + initialTaskId;
 let activeSessionId = sessionId;
 const verificationController = new AbortController();
 let verifying = false;
@@ -130,6 +131,8 @@ while (true) {
   const followupArgs = buildWorkerResumeArgs({
     worktreePath, sessionId: activeSessionId, resultPath: followupPath, model, prompt: message.body,
   });
+  executionId = 'message:' + message.id;
+  assertBudgetAvailable(stateDir, teamConfig);
   child = spawn('traex', followupArgs, { cwd: worktreePath, stdio: ['inherit', 'pipe', 'inherit'] });
   attachJsonOutput(child);
   const followupStartedAt = new Date().toISOString();
@@ -267,6 +270,7 @@ function launchTrae(args) {
 }
 
 function attachJsonOutput(processHandle) {
+  let ordinal = 0;
   const lines = createInterface({ input: processHandle.stdout });
   lines.on('line', (line) => {
     let event;
@@ -288,9 +292,9 @@ function attachJsonOutput(processHandle) {
       return;
     }
     if (event.type === 'turn.completed' && event.usage) {
-      const current = JSON.parse(readFileSync(join(stateDir, 'workers', workerName + '.json'), 'utf8'));
-      const usage = addUsage(current.usage, event, model || null, teamConfig.model_prices);
-      if (usage !== current.usage) updateWorkerState(stateDir, workerName, { usage });
+      const record = recordUsage(stateDir, { worker: workerName, execution: executionId, ordinal: ++ordinal,
+        event, requestedModel: model || null, prices: teamConfig.model_prices });
+      if (record?.usage) updateWorkerState(stateDir, workerName, { usage: record.usage });
     }
     const item = event.item;
     if (item?.type === 'agent_message' && item.text) process.stdout.write(`${item.text}\n`);

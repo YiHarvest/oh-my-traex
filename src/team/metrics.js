@@ -1,3 +1,4 @@
+import { readUsageLedger, budgetStatus } from './usage-ledger.js';
 import { summarizeUsage } from './usage.js';
 import { readMailbox } from './state.js';
 import { existsSync, readdirSync, statSync } from 'node:fs';
@@ -9,11 +10,15 @@ export function collectTeamMetrics(cwd, name, run, snapshot = {}) {
   const state = snapshot.state || teamStatus(cwd, name, run);
   const messages = snapshot.messages || state.workers.flatMap((worker) => readMailbox(state.stateDir, worker.name).messages);
   const events = countStoredEvents(state.stateDir);
+  const ledger = readUsageLedger(state.stateDir);
+  const historical = ledger.workers.filter((worker) => !state.workers.some((current) => current.name === worker.name));
+  const usageWorkers = [...state.workers.map((worker) => ledger.workers.find((entry) => entry.name === worker.name) || worker), ...historical];
   const taskDurations = state.tasks.map(durationBetween('started_at', 'completed_at')).filter(Number.isFinite);
   const deliveryLatencies = messages.map(durationBetween('created_at', 'delivered_at')).filter(Number.isFinite);
   return {
     team: state.config.name,
-    usage: summarizeUsage(state.workers),
+    usage: summarizeUsage(usageWorkers),
+    budget: budgetStatus(state.stateDir, state.config),
     worker_models: Object.fromEntries(state.workers.map((worker) => [worker.name, worker.model || null])),
     generated_at: new Date().toISOString(),
     task_queue_depth: state.tasks.filter((task) => ['pending', 'blocked', 'in_progress'].includes(task.status)).length,

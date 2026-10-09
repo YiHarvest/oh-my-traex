@@ -239,3 +239,7 @@ metrics 和 Dashboard 的 metrics.usage 汇总 worker 实际 turn.completed 事�
 验证命令现在异步执行，保持续租并响应 stop。可重复指定 --prepare-command 配置环境准备；未显式配置时，有 package-lock.json 且缺少 node_modules 的工作区自动执行 npm ci，使用 npm 自带缓存。准备失败与测试失败分别记录。集成通过 Git 补丁等价性跳过已合入提交，支持同一 worker 多次交付；验证期间停止 Team 会取消集成并保留 leader HEAD。
 
 Dashboard 创建 Team 时支持验证与准备命令，并等待 worker 实际启动后确认成功；缺失配置和启动回滚会显示错误。SSE 快照按业务状态去重，忽略嵌套采集时间；慢客户端超过 1 MiB 写缓冲会断开并通过浏览器重连恢复最新快照。
+
+### 用量账本与预算
+
+usage 目录保存不可变的 worker 用量事件，按 worker、执行轮次和后端事件 ID 去重；缺少 ID 时使用该轮次内序号。账本不随 worker 移除而删除。后端报告模型与请求模型分别记录，优先按报告模型计价。--max-tokens N 限制 Team 已观察到的输入加输出 token；超限后拒绝新派发，supervisor 停止 Team。这是轮次结束后可见的预算，并行请求可超出阈值，不包含未报告用量或 leader/planner 开销；无 ID 的重复事件无法在同一流中可靠区分。

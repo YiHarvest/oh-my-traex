@@ -14,7 +14,7 @@ const START_TOKEN = /^(\d+)(?::([a-z][a-z0-9-]*))?$/i;
 const TEAM_HELP = `oh-my-traex durable team runtime
 
 Usage:
-  otx team [N:role] [--name NAME] [--model MODEL] [--headless] [--no-plan] [--role-model ROLE=MODEL] [--model-prices FILE] [--prepare-command CMD] [--verify-command CMD] [--planner-timeout-ms N] [-C DIR] "task"
+  otx team [N:role] [--name NAME] [--model MODEL] [--headless] [--no-plan] [--role-model ROLE=MODEL] [--model-prices FILE] [--max-tokens N] [--prepare-command CMD] [--verify-command CMD] [--planner-timeout-ms N] [-C DIR] "task"
   otx team list [-C DIR] [--json]
   otx team status|reconcile|recover|supervise|await|resume|stop|cleanup <name> [-C DIR]
   otx team tasks|diagnose|doctor|metrics <name> [-C DIR]
@@ -142,6 +142,7 @@ export function parseTeamArgs(args) {
       const [role, model] = parseRoleModel(requireValue(tokens, ++index, token));
       (options.roleModels ||= {})[role] = model;
     }
+    else if (token === '--max-tokens') options.maxTokens = Number(requireValue(tokens, ++index, token));
     else if (token === '--model-prices') options.modelPricesPath = requireValue(tokens, ++index, token);
     else if (token === '--prepare-command') (options.prepareCommands ||= []).push(requireValue(tokens, ++index, token));
     else if (token === '--verify-command') (options.verifyCommands ||= []).push(requireValue(tokens, ++index, token));
@@ -158,6 +159,7 @@ export function parseTeamArgs(args) {
     && (!Number.isInteger(options.plannerTimeoutMs) || options.plannerTimeoutMs < 1000)) {
     throw new Error('--planner-timeout-ms must be an integer of at least 1000.');
   }
+  if (options.maxTokens !== undefined && (!Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1)) throw new Error('--max-tokens must be a positive integer');
   const task = taskParts.join(' ').trim();
   if (!task) throw new Error('Usage: otx team [N:role] [options] "task"');
   return { subcommand, task, options };
@@ -299,6 +301,7 @@ export async function runTeamCommand(args) {
     prepareCommands: parsed.options.prepareCommands,
     roleModels: parsed.options.roleModels,
     modelPrices: loadModelPrices(parsed.options.modelPricesPath),
+    maxTokens: parsed.options.maxTokens,
     teamName: parsed.options.name,
     baseRole: parsed.options.role,
     autoPlan: parsed.options.autoPlan !== false,
