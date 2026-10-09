@@ -229,3 +229,9 @@ CI 在 Linux、macOS、Windows（Node.js 22）以及 Linux Node.js 24 上运行�
 
 结构化规划的 file_paths 会显示在 worker 指令中，并在完成和集成时按实际 Git diff 校验。目录边界包含其子路径；重命名的源和目标均需属于该 worker。越界修改保留在 worktree 中，任务失败并报告路径。静态、动态添加和旧 worker 没有声明路径时会标记为未强制约束。
 观察端使用最长 2 秒的进程内状态缓存，Dashboard 动作会立即失效缓存；修改和集成路径始终读取实时状态。无人连接 SSE 时暂停后台采集。事件计数增量读取新增文件，归档后统计保留窗口，与独立 metrics 命令一致。
+
+### 模型与用量
+
+使用 --model 指定 Team 默认模型，重复 --role-model explorer=模型名 为角色覆盖。动态添加 worker 的显式 --model 优先于角色配置；模型名透传给 TraeX。
+
+metrics 和 Dashboard 的 metrics.usage 汇总 worker 实际 turn.completed 事件中的 input_tokens、cached_input_tokens 和 output_tokens。没有 usage 时显示 null。可用 --model-prices prices.json 提供每百万 token 的 USD 单价，格式为 {"模型名":{"input_per_million":2,"cached_input_per_million":1,"output_per_million":5}}。缺少模型或价格时费用为 null；估算仅覆盖已收到 usage 的 worker，不包含 leader、planner 或后端未报告的子 Agent 用量。

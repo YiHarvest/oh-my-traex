@@ -32,3 +32,11 @@ export function buildWorkerActionPayload({ mode, team, target, message, dependen
   if (mode === 'assign') return { action: 'assign-task', team, worker: target, description: message, depends_on: dependencies };
   return { action: 'send-message', team, worker: target, message };
 }
+
+export function formatObservedUsage(usage) {
+  const known = Number.isFinite(usage?.input_tokens) && Number.isFinite(usage?.output_tokens);
+  return {
+    tokens: known ? String(usage.input_tokens + usage.output_tokens) + ' (observed)' : '—',
+    cost: Number.isFinite(usage?.estimated_cost_usd) ? '$' + usage.estimated_cost_usd.toFixed(4) + ' est.' : '—',
+  };
+}

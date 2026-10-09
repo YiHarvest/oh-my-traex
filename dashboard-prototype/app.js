@@ -1,4 +1,4 @@
-import { actionAvailability, buildWorkerActionPayload, nextWrappedIndex, parseDependencyIds, summarizeRuntime } from './ui-model.js';
+import { formatObservedUsage, actionAvailability, buildWorkerActionPayload, nextWrappedIndex, parseDependencyIds, summarizeRuntime } from './ui-model.js';
 import { createIcons } from './icons.js';
 
 const dashboardToken = new URLSearchParams(window.location.hash.slice(1)).get('token') || '';
@@ -175,7 +175,7 @@ function renderAgents(task) {
     return '<button class="agent-card child-card ' + (agent.selected ? 'selected' : '') + '" type="button" data-agent-id="' + agent.id + '" aria-pressed="' + String(Boolean(agent.selected)) + '">'
       + '<div class="agent-head"><div><div class="eyebrow">' + escapeHtml(agent.role) + '</div><h2>' + escapeHtml(agent.name) + '</h2></div>'
       + '<span class="status-chip ' + agent.status + '">' + (agent.status === 'working' ? '<span class="spinner"></span>' : '') + label(agent.status) + '</span></div>'
-      + '<div class="agent-meta"><span>Model <strong>' + escapeHtml(task.model) + '</strong></span></div><p>' + escapeHtml(agent.detail) + '</p>'
+      + '<div class="agent-meta"><span>Model <strong>' + escapeHtml(agent.model || task.model) + '</strong></span></div><p>' + escapeHtml(agent.detail) + '</p>'
       + '<div class="agent-foot"><span>' + escapeHtml((agent.paneId || agent.id) + (agent.taskId ? ' · task:' + agent.taskId : '')) + '</span><span>' + escapeHtml(agent.elapsed) + '</span></div></button>';
   }).join('');
 }
@@ -305,6 +305,7 @@ function mapLiveTeam(team) {
         id: worker.name,
         name: worker.name,
         role: worker.role || 'worker',
+        model: worker.model || team.config.model || 'TraeX default',
         status: worker.health === 'stalled' ? 'stalled' : normalizeLiveStatus(worker.status),
         detail: worker.assignment || worker.error || 'Long-lived TraeX worker',
         elapsed: formatHeartbeat(worker),
@@ -336,8 +337,8 @@ function mapLiveTeam(team) {
       model: team.config.model || 'TraeX default',
       progress: progress,
       duration: relativeDuration(team.config.created_at),
-      tokens: 'live',
-      cost: '—',
+      tokens: formatObservedUsage(team.metrics?.usage).tokens,
+      cost: formatObservedUsage(team.metrics?.usage).cost,
       agents: workers,
       checklist: team.tasks.map(function (item) {
         return { title: item.subject, note: taskNote(item), state: normalizeLiveStatus(item.status), owner: item.owner || 'unassigned' };
@@ -519,7 +520,7 @@ async function submitWorkerAction(event) {
   try {
     if (state.mode === 'live') {
       if (state.actionMode === 'add') {
-        await callAction(buildWorkerActionPayload({ mode: 'add', team: task.liveTeam, target: worker, message: message, model: task.model }));
+        await callAction(buildWorkerActionPayload({ mode: 'add', team: task.liveTeam, target: worker, message: message }));
       } else if (state.actionMode === 'assign') {
         const dependencies = parseDependencyIds(elements.actionDependencies.value);
         await callAction(buildWorkerActionPayload({ mode: 'assign', team: task.liveTeam, target: worker, message: message, dependencies: dependencies }));
