@@ -52,7 +52,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/api/actions') {
       authorizeApiRequest(request, url, true);
       const body = await readJsonBody(request);
-      const result = runAction(body);
+      const result = await runAction(body);
       readSnapshot.clear();
       broadcastSnapshot(true);
       return sendJson(response, 200, { ok: true, result });

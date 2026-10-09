@@ -25,6 +25,8 @@ let activeDelivery = null;
 updateWorkerState(stateDir, workerName, { status: 'working', blocked_task_ids: [] });
 
 let activeSessionId = sessionId;
+const verificationController = new AbortController();
+let verifying = false;
 let child = launchTrae(buildWorkerExecArgs({
   worktreePath, sessionId, resultPath, model, prompt: readFileSync(promptPath, 'utf8'),
 }));
@@ -34,6 +36,8 @@ const heartbeat = setInterval(() => {
   if (activeDelivery) renewMailboxDelivery(stateDir, workerName, activeDelivery.messageId, activeDelivery.token);
 }, 5000);
 const forwardSignal = (signal) => {
+  verificationController.abort();
+  if (verifying) return;
   if (!child.killed) child.kill(signal);
   const forcedExit = setTimeout(() => process.exit(0), 250);
   forcedExit.unref();
@@ -59,7 +63,8 @@ const hasResult = existsSync(resultPath) && statSync(resultPath).size > 0;
 const commitSatisfied = initialState.requires_commit ? committed : true;
 const ownership = inspectWriteOwnership(worktreePath, initialState.base_commit, commitSha, initialState.file_paths);
 const verification = exitCode === 0 && commitSatisfied && clean && hasResult && initialState.requires_commit && verificationPolicy
-  ? runVerification(worktreePath, verificationPolicy) : null;
+  ? await verifyWorker() : null;
+if (verificationController.signal.aborted) process.exit(0);
 const finalStatus = ownership.passed && exitCode === 0 && commitSatisfied && clean && hasResult && verification?.passed !== false ? 'completed' : 'failed';
 const currentState = JSON.parse(readFileSync(join(stateDir, 'workers', workerName + '.json'), 'utf8'));
 if (currentState.status === 'cancelled') {
@@ -153,7 +158,8 @@ while (true) {
   const followupHasResult = existsSync(followupPath) && statSync(followupPath).size > 0;
   const followupOwnership = inspectWriteOwnership(worktreePath, followupBaseCommit, followupCommitSha, followupStartState.file_paths);
   const followupVerification = followupExit === 0 && followupCommitSatisfied && followupHasResult && followupStartState.requires_commit && verificationPolicy
-    ? runVerification(worktreePath, verificationPolicy) : null;
+    ? await verifyWorker() : null;
+  if (verificationController.signal.aborted) process.exit(0);
   const followupStatus = followupOwnership.passed && followupVerification?.passed !== false && followupExit === 0
     && followupDirty.status === 0
     && followupDirty.stdout.trim() === ''
@@ -317,4 +323,11 @@ async function waitForInitialClaim() {
     });
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+}
+
+async function verifyWorker() {
+  verifying = true;
+  updateWorkerState(stateDir, workerName, { phase: 'verifying', last_activity_at: new Date().toISOString() });
+  try { return await runVerification(worktreePath, verificationPolicy, spawnSync, { signal: verificationController.signal }); }
+  finally { verifying = false; updateWorkerState(stateDir, workerName, { phase: null }); }
 }

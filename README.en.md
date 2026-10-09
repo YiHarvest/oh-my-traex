@@ -235,3 +235,5 @@ Observers cache status for at most two seconds; Dashboard actions invalidate the
 Use --model for the Team default and repeated --role-model explorer=model overrides. An explicit model on add-worker takes precedence over the role mapping. Names pass through to TraeX.
 
 Metrics and Dashboard metrics.usage aggregate observed worker turn.completed input, cached input and output tokens. Missing usage is null. Supply --model-prices prices.json with USD rates per million tokens: {"model":{"input_per_million":2,"cached_input_per_million":1,"output_per_million":5}}. Missing model/pricing yields null cost. Estimates cover reported worker usage only, excluding leader, planner and unreported child-agent usage.
+
+Verification runs asynchronously with heartbeat renewal and stop cancellation. Repeated --prepare-command options configure environment setup. By default, a package-lock.json with no node_modules triggers npm ci using npm's cache. Preparation and test failures are recorded separately. Integration skips patch-equivalent commits already on the leader, supports successive worker deliveries, and cancels publication when stopped during verification.
