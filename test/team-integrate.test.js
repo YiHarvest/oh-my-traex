@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { initTeamState, readTeamState, updateWorkerState } from '../src/team/state.js';
+import { initTeamState, readTeamState, updateTaskState, updateWorkerState } from '../src/team/state.js';
 import { cleanupTeam, integrateTeam, reconcileTeam, stopTeam } from '../src/team/runtime.js';
 import { createWorkerWorktrees } from '../src/team/worktree.js';
 
@@ -37,6 +37,7 @@ test('integrates the complete validated worker commit range', () => {
       leaderSessionId: 'leader', workers,
     });
     updateWorkerState(initialized.stateDir, 'worker-1', { status: 'completed', commit });
+    updateTaskState(initialized.stateDir, '1', { status: 'completed' });
 
     const result = integrateTeam(repoRoot, 'demo', ['worker-1']);
     assert.equal(result.ok, true);
@@ -88,6 +89,7 @@ test('invalidates integration evidence after leader history is reset and preserv
       leaderSessionId: 'leader', workers,
     });
     updateWorkerState(initialized.stateDir, 'worker-1', { status: 'completed', commit });
+    updateTaskState(initialized.stateDir, '1', { status: 'completed' });
 
     const integrated = integrateTeam(repoRoot, 'evidence', ['worker-1']);
     assert.equal(integrated.ok, true);
@@ -165,6 +167,7 @@ test('rolls back the entire integration batch when a later worker conflicts', ()
     for (const worker of workers) {
       const commit = git(worker.worktree_path, ['rev-parse', 'HEAD']).stdout.trim();
       updateWorkerState(initialized.stateDir, worker.name, { status: 'completed', commit });
+      updateTaskState(initialized.stateDir, String(worker.index), { status: 'completed' });
     }
 
     const result = integrateTeam(repoRoot, 'transaction');

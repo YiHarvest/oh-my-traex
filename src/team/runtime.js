@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { buildLeaderPrompt, buildWorkerPrompt } from './prompt.js';
 import { planTeam } from './planner.js';
-import { addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reassignTeamTask, recoverDeliveryTransactions, removeTeamWorker, sanitizeTeamName, teamStateDir, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState, withStateLock } from './state.js';
+import { failWorkerExecution, failTerminalDependencies, addTeamWorker, assertTeamDoesNotExist, createTeamTask, defaultTeamName, enqueueMailboxMessage, enqueueTaskMessage, initTeamState, listTeamTasks, readMailbox, readTeamState, reassignTeamTask, recoverDeliveryTransactions, removeTeamWorker, sanitizeTeamName, teamStateDir, updateMailboxMessage, updateTaskState, updateTeamConfig, updateWorkerState, withStateLock } from './state.js';
 import { assertCleanWorkspace, cleanupWorkerWorktree, createWorkerWorktree, createWorkerWorktrees, inspectWorkerWorktree, rollbackWorkerWorktrees, worktreeStatus } from './worktree.js';
 import { beginTeamTransaction, recoverOwnedTransaction, finishTeamTransaction, listTeamTransactions, updateTeamTransaction } from './transaction.js';
 import { appendTeamEvent, listTeamEvents } from './events.js';
@@ -192,7 +192,7 @@ function inspectTeam(cwd, name, run, persist) {
             : 'healthy';
     const startupGrace = currentWorker.status === 'starting'
       && Date.now() - Date.parse(currentWorker.updated_at || state.config.created_at) < 10_000;
-    if (!paneAlive && !startupGrace && ['starting', 'queued', 'working'].includes(currentWorker.status)) {
+    if (!paneAlive && !startupGrace && ['starting', 'queued', 'working', 'blocked'].includes(currentWorker.status)) {
       const failure = {
         status: 'failed',
         error: 'worker pane exited before recording a terminal result',
@@ -200,14 +200,7 @@ function inspectTeam(cwd, name, run, persist) {
         pane_alive: false,
         dirty: worktreeStatus(currentWorker.worktree_path) !== '',
       };
-      const failed = persist ? updateWorkerState(state.stateDir, currentWorker.name, failure) : { ...currentWorker, ...failure };
-      if (persist) {
-        updateTaskState(state.stateDir, currentWorker.initial_task_id || String(currentWorker.index), {
-          status: 'failed',
-          error: failed.error,
-          completed_at: failed.completed_at,
-        });
-      }
+      const failed = persist ? failWorkerExecution(state.stateDir, currentWorker.name, failure.error) : { ...currentWorker, ...failure };
       return { ...failed, health: 'dead', heartbeat_age_ms: heartbeatAgeMs };
     }
     return {
@@ -219,16 +212,31 @@ function inspectTeam(cwd, name, run, persist) {
       activity_age_ms: activityAgeMs,
     };
   });
-  if (persist) state.rescheduled = rescheduleFailedTasks(state, run);
+  if (persist) {
+    state.rescheduled = rescheduleFailedTasks(state, run);
+    failTerminalDependencies(state.stateDir);
+    const refreshed = readTeamState(cwd, name);
+    state.tasks = refreshed.tasks;
+    state.workers = state.workers.map((worker) => {
+      const current = refreshed.workers.find((candidate) => candidate.name === worker.name);
+      const task = state.tasks.find((candidate) => candidate.id === (current.current_task_id || current.initial_task_id));
+      if (current.status === 'blocked' && task?.status === 'failed') {
+        return { ...worker, ...updateWorkerState(state.stateDir, current.name, { status: 'failed', error: task.error }) };
+      }
+      return { ...worker, ...current };
+    });
+  }
+  const tasksTerminal = state.tasks.every((task) => ['completed', 'failed', 'cancelled'].includes(task.status));
+  const messagesTerminal = state.workers.every((worker) => readMailbox(state.stateDir, worker.name).messages.every((message) => ['completed', 'failed', 'cancelled'].includes(message.status)));
   if (state.config.status === 'running' && state.rescheduled?.length === 0
-    && state.workers.every((worker) => ['completed', 'failed'].includes(worker.status))) {
+    && tasksTerminal && messagesTerminal && state.workers.every((worker) => ['completed', 'failed', 'cancelled'].includes(worker.status))) {
     const producedWorkers = state.workers
       .filter((worker) => worker.requires_commit && worker.commit && worker.commit !== worker.base_commit);
     const integrationCurrent = producedWorkers.length > 0
       && producedWorkers.every((worker) => ['integrated', 'already_integrated'].includes(worker.integration?.status)
         && worker.integration?.commit === worker.commit);
     const terminalConfig = {
-      status: state.workers.some((worker) => worker.status === 'failed')
+      status: state.tasks.some((task) => task.status === 'failed') || state.workers.some((worker) => worker.status === 'failed')
         ? 'failed'
         : integrationCurrent ? 'integrated' : 'ready',
       completed_at: state.config.completed_at || (persist ? new Date().toISOString() : null),
@@ -275,7 +283,7 @@ export async function awaitTeam(cwd, name, timeoutMs = 3_600_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const state = reconcileTeam(cwd, name);
-    if (state.workers.every((worker) => ['completed', 'failed', 'cancelled'].includes(worker.status))) return state;
+    if (['ready', 'failed', 'integrated', 'stopped', 'cleaned'].includes(state.config.status)) return state;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   throw new Error(`timed out waiting for team ${name}`);
@@ -412,6 +420,7 @@ export function assignTeamTask(cwd, name, workerName, description, dependsOn = [
     role: worker.role,
     requires_commit: worker.requires_commit,
     depends_on: dependsOn,
+    file_paths: worker.file_paths || [],
   });
   const body = `New OTX team task ${task.id}: ${description} Follow your existing worker contract, verify the result, and ${worker.requires_commit ? 'commit all intended changes.' : 'avoid changes unless essential.'}`;
   const message = enqueueTaskMessage(state.stateDir, workerName, task.id, body);
@@ -436,10 +445,10 @@ function rescheduleFailedTasks(state, run) {
       const failedOwner = current.workers.find((worker) => worker.name === task.owner);
       if (!failedOwner || failedOwner.status !== 'failed' || (task.reschedule_count || 0) >= 1) continue;
       const target = liveWorkers.find((worker) => worker.name !== failedOwner.name
-          && worker.requires_commit === task.requires_commit
+          && worker.requires_commit === task.requires_commit && ownershipCompatible(task, worker)
           && worker.role === task.role)
         || liveWorkers.find((worker) => worker.name !== failedOwner.name
-          && worker.requires_commit === task.requires_commit);
+          && worker.requires_commit === task.requires_commit && ownershipCompatible(task, worker));
       if (!target) continue;
       const reassigned = reassignTeamTask(state.stateDir, task.id, failedOwner.name, target.name);
       if (!reassigned.ok) continue;
@@ -671,6 +680,7 @@ function addWorkerLocked(cwd, name, role, assignment, { model, env = process.env
       resources: { workers: [{ ...worker, pane_id: paneId, pane_pid: updated.pane_pid, process_identity: launched.processIdentity, session_id: sessionId }] },
     });
     mux.layout();
+    updateTeamConfig(state.stateDir, { status: 'running', completed_at: null }, { allowTerminalReset: true, reason: 'worker added' });
     finishTeamTransaction(transaction);
     return { worker: updated, task };
   } catch (error) {
@@ -844,4 +854,11 @@ function materializePlannedWorkers(plannedWorkers) {
     ...worker,
     depends_on: worker.depends_on_symbols.map((symbol) => taskIdBySymbol.get(symbol)),
   }));
+}
+
+function ownershipCompatible(task, worker) {
+  const required = task.file_paths || [];
+  const allowed = worker.file_paths || [];
+  if (!required.length) return !allowed.length;
+  return required.every((path) => allowed.some((root) => path === root || path.startsWith(root + '/')));
 }

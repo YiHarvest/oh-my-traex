@@ -942,3 +942,54 @@ function syncDirectory(path) {
 function git(cwd, args) {
   return spawnSync('git', args, { cwd, encoding: 'utf8' });
 }
+
+// Crash reconciliation preserves completed history and fences every unfinished
+// task/message together with the worker record.
+export function failWorkerExecution(stateDir, workerName, error) {
+  const tasks = listTeamTasks(stateDir).filter((task) => task.owner === workerName && !TERMINAL_STATUSES.task.has(task.status));
+  const messages = readMailbox(stateDir, workerName).messages.filter((message) => !TERMINAL_STATUSES.mailbox.has(message.status));
+  const keys = ['worker-' + workerName, ...tasks.map((task) => 'task-' + task.id), ...messages.map((message) => 'mailbox-' + message.id)].sort();
+  return withOrderedRecordLocks(stateDir, keys, () => {
+    const worker = readJson(workerStatePath(stateDir, workerName));
+    const at = new Date().toISOString();
+    for (const old of tasks) {
+      const task = readTeamTask(stateDir, old.id);
+      if (task.owner !== workerName || TERMINAL_STATUSES.task.has(task.status)) continue;
+      const next = { ...task, status: 'failed', claim: null, error, completed_at: at };
+      const tx = beginDeliveryTransaction(stateDir, { operation: 'complete', workerName, taskId: task.id, task: next });
+      writeJsonAtomic(taskStatePath(stateDir, task.id), next); finishDeliveryTransaction(tx);
+    }
+    for (const old of messages) {
+      const path = mailboxMessagePath(stateDir, workerName, old.id);
+      const message = readJson(path);
+      if (TERMINAL_STATUSES.mailbox.has(message.status)) continue;
+      const next = { ...message, status: 'failed', receipt: null, error, completed_at: at };
+      const tx = beginDeliveryTransaction(stateDir, { operation: 'complete', workerName, messageId: message.id, message: next });
+      writeJsonAtomic(path, next); finishDeliveryTransaction(tx);
+    }
+    const next = { ...worker, status: 'failed', current_task_id: null, current_message_id: null, error, completed_at: at };
+    writeJsonAtomic(workerStatePath(stateDir, workerName), next);
+    return next;
+  });
+}
+
+export function failTerminalDependencies(stateDir) {
+  const failed = [];
+  let changed;
+  do {
+    changed = false;
+    for (const task of listTeamTasks(stateDir)) {
+      if (!['pending', 'blocked'].includes(task.status)) continue;
+      const dependencies = (task.depends_on || []).filter((id) => ['failed', 'cancelled'].includes(readTeamTask(stateDir, id).status));
+      if (!dependencies.length) continue;
+      withTaskLock(stateDir, task.id, () => {
+        const current = readTeamTask(stateDir, task.id);
+        if (!['pending', 'blocked'].includes(current.status)) return;
+        writeJsonAtomic(taskStatePath(stateDir, task.id), { ...current, status: 'failed', claim: null,
+          error: 'dependency_failed: ' + dependencies.join(', '), completed_at: new Date().toISOString() });
+        failed.push(task.id); changed = true;
+      });
+    }
+  } while (changed);
+  return failed;
+}
