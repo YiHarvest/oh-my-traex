@@ -1,3 +1,4 @@
+import { normalizeOwnedPath } from './ownership.js';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -86,16 +87,6 @@ export function validateTeamPlan(plan, workerCount) {
   assertAcyclic(normalized);
   assertNonOverlappingWrites(normalized);
   return { summary: plan.summary?.trim() || '', workers: normalized };
-}
-
-function normalizeOwnedPath(value) {
-  let normalized = String(value).trim().split('\\').join('/');
-  while (normalized.startsWith('./')) normalized = normalized.slice(2);
-  while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
-  if (!normalized || normalized.startsWith('/') || normalized.split('/').includes('..')) {
-    throw new Error('planner returned unsafe file path: ' + value);
-  }
-  return normalized;
 }
 
 function assertNonOverlappingWrites(workers) {

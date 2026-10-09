@@ -226,3 +226,5 @@ CI runs unit tests on Linux, macOS, and Windows with Node.js 22, plus Linux with
 New writing teams use the repository's npm test, or repeated --verify-command "command" options. Repositories without a test script must supply a command. These trusted project checks run locally with a 120-second timeout per command.
 
 Worker evidence records the command, exit code and commit. Failed checks, timeouts or a dirty worktree prevent completion. Integration reruns the same checks in the staging worktree before publishing to the leader. Existing teams without a verification policy retain their previous behavior.
+
+Structured plans pass file_paths to workers and validate actual Git diffs at completion and integration. Both sides of renames must be owned. Out-of-scope edits remain in the worktree and fail with the affected paths. Static, dynamically added and legacy workers without declared paths are explicitly unenforced.
