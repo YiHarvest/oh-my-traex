@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { createTeamSnapshotReader } from './snapshot.js';
 import { teamStatus } from './runtime.js';
 
 export const DEFAULT_HUD_INTERVAL_MS = 1000;
@@ -33,10 +34,11 @@ export async function watchTeamHud(cwd, name, {
   const owner = env.OTX_HUD_TEAM === name ? {
     team: name, runId: env.OTX_HUD_RUN_ID, leader: env.OTX_HUD_LEADER, pane: env.TMUX_PANE, pid: process.pid,
   } : null;
+  const snapshot = createTeamSnapshotReader();
   let first = true;
   try {
     while (!signal?.aborted) {
-      const state = readTeamHud(cwd, name, { run });
+      const state = snapshot(cwd, name, run);
       if (owner && (state.config.run_id !== owner.runId || ['stopped', 'cleaned', 'cleanup_pending'].includes(state.config.status)
         || !hudLeaderAlive(owner, run))) break;
       const frame = buildTeamHud(state, { width });

@@ -1,11 +1,13 @@
 import { readMailbox } from './state.js';
-import { listTeamEvents } from './events.js';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { readVersionedRecord } from './codec.js';
 import { teamStatus } from './runtime.js';
 
-export function collectTeamMetrics(cwd, name, run) {
-  const state = teamStatus(cwd, name, run);
-  const messages = state.workers.flatMap((worker) => readMailbox(state.stateDir, worker.name).messages);
-  const events = readAllEvents(state.stateDir);
+export function collectTeamMetrics(cwd, name, run, snapshot = {}) {
+  const state = snapshot.state || teamStatus(cwd, name, run);
+  const messages = snapshot.messages || state.workers.flatMap((worker) => readMailbox(state.stateDir, worker.name).messages);
+  const events = countStoredEvents(state.stateDir);
   const taskDurations = state.tasks.map(durationBetween('started_at', 'completed_at')).filter(Number.isFinite);
   const deliveryLatencies = messages.map(durationBetween('created_at', 'delivered_at')).filter(Number.isFinite);
   return {
@@ -26,15 +28,33 @@ export function collectTeamMetrics(cwd, name, run) {
   };
 }
 
-function readAllEvents(stateDir) {
-  const events = [];
-  let cursor = null;
-  while (true) {
-    const page = listTeamEvents(stateDir, { after: cursor, limit: 1000 });
-    events.push(...page.events);
-    if (page.events.length < 1000 || page.cursor === cursor) return events;
-    cursor = page.cursor;
+const eventCaches = new Map();
+function countStoredEvents(stateDir) {
+  const directory = join(stateDir, 'events');
+  if (!existsSync(directory)) { eventCaches.delete(stateDir); return new Map(); }
+  const stamp = statSync(directory, { bigint: true }).mtimeNs.toString();
+  let cache = eventCaches.get(stateDir);
+  if (cache?.stamp === stamp) return cache.counts;
+  if (!cache) cache = { files: new Map(), counts: new Map() };
+  const names = new Set(readdirSync(directory).filter((name) => /^\d{16}-.*\.json$/.test(name)));
+  for (const [name, type] of cache.files) {
+    if (names.has(name)) continue;
+    cache.counts.set(type, cache.counts.get(type) - 1);
+    cache.files.delete(name);
   }
+  for (const name of names) {
+    if (cache.files.has(name)) continue;
+    try {
+      const { type } = readVersionedRecord(join(directory, name));
+      cache.files.set(name, type);
+      cache.counts.set(type, (cache.counts.get(type) || 0) + 1);
+    } catch { /* A concurrent prune or quarantined record can disappear. */ }
+  }
+  cache.stamp = stamp;
+  eventCaches.delete(stateDir);
+  eventCaches.set(stateDir, cache);
+  if (eventCaches.size > 64) eventCaches.delete(eventCaches.keys().next().value);
+  return cache.counts;
 }
 
 function durationBetween(startField, endField) {
@@ -54,7 +74,7 @@ function countBy(records, select) {
 }
 
 function countEvents(events, type) {
-  return events.filter((event) => event.type === type).length;
+  return events.get(type) || 0;
 }
 
 function summarize(values) {

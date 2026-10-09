@@ -1,3 +1,5 @@
+import { readMailbox } from '../src/team/state.js';
+import { createTeamSnapshotReader } from '../src/team/snapshot.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -51,6 +53,7 @@ const server = createServer(async (request, response) => {
       authorizeApiRequest(request, url, true);
       const body = await readJsonBody(request);
       const result = runAction(body);
+      readSnapshot.clear();
       broadcastSnapshot(true);
       return sendJson(response, 200, { ok: true, result });
     }
@@ -67,6 +70,7 @@ server.listen(options.port, '127.0.0.1', () => {
   process.stdout.write('repository: ' + repoRoot + '\n');
 });
 
+const readSnapshot = createTeamSnapshotReader();
 const poller = setInterval(() => broadcastSnapshot(false), options.pollMs);
 process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
@@ -111,17 +115,17 @@ function collectSnapshot() {
 }
 
 function collectTeam(name) {
-  const state = teamStatus(repoRoot, name);
+  const state = readSnapshot(repoRoot, name);
   const mailboxes = Object.fromEntries(state.workers.map((worker) => [
     worker.name,
-    readTeamMailbox(repoRoot, name, worker.name).messages,
+    readMailbox(state.stateDir, worker.name).messages,
   ]));
   return {
     state_dir: state.stateDir,
     config: state.config,
     tasks: state.tasks,
     mailboxes,
-    metrics: collectTeamMetrics(repoRoot, name),
+    metrics: collectTeamMetrics(repoRoot, name, undefined, { state, messages: Object.values(mailboxes).flat() }),
     workers: state.workers.map((worker) => ({
       ...worker,
       terminal_lines: readWorkerOutput(worker),
@@ -132,7 +136,7 @@ function collectTeam(name) {
 }
 
 function readWorkerOutput(worker) {
-  if (worker.pane_alive && worker.pane_id) {
+  if (worker.pane_alive && worker.pane_id?.startsWith('%')) {
     const capture = spawnSync('tmux', ['capture-pane', '-p', '-J', '-S', '-80', '-t', worker.pane_id], { encoding: 'utf8' });
     if (capture.status === 0) return capture.stdout.split('\n').filter(Boolean).slice(-80);
   }
@@ -160,6 +164,7 @@ function openEventStream(request, response) {
 }
 
 function broadcastSnapshot(force) {
+  if (!force && clients.size === 0) return;
   let snapshot;
   try {
     snapshot = collectSnapshot();
