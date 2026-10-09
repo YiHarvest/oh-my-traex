@@ -149,3 +149,30 @@ test('stopped supervisor does not recover or reclaim persisted tasks', () => {
     assert.deepEqual(result.reclaimed_tasks, []);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
+
+test('supervisor during startup never recovers its live parent transaction', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'otx-start-overlap-'));
+  let runtime; let recovery; const killed = [];
+  const run = (command, args, options) => {
+    if (command === 'git') return spawnSync(command, args, options);
+    if (args[0] === 'split-window') return { status: 0, stdout: '%2\n' };
+    if (args[0] === 'new-window') { recovery = superviseTeamOnce(cwd, 'overlap', run); return { status: 0, stdout: '%3\n' }; }
+    if (args[0] === 'display-message') {
+      if (args.at(-1) === '#{pane_pid}') return { status: 0, stdout: '222\n' };
+      return { status: 0, stdout: 'overlap\tworker-1\t' + readTeamState(cwd, 'overlap').config.run_id + '\t222\t0\n' };
+    }
+    if (args[0] === 'kill-pane') killed.push(args[2]);
+    return { status: 0, stdout: '' };
+  };
+  try {
+    for (const args of [['init', '-q'], ['config', 'user.name', 'Test'], ['config', 'user.email', 'test@example.com'], ['commit', '--allow-empty', '-qm', 'base']]) {
+      assert.equal(spawnSync('git', args, { cwd }).status, 0);
+    }
+    runtime = await startTeam({ cwd, task: 'overlap', teamName: 'overlap', workerCount: 1, baseRole: 'reviewer', autoPlan: false,
+      env: { TMUX: '1', TMUX_PANE: '%1' }, run });
+    assert.deepEqual(recovery.recovered_transactions, []);
+    assert.deepEqual(killed, []);
+    assert.equal(readTeamState(cwd, 'overlap').config.status, 'running');
+    assert.equal(spawnSync('git', ['status', '--porcelain'], { cwd: runtime.workers[0].worktree_path }).status, 0);
+  } finally { if (runtime) rollbackWorkerWorktrees(cwd, runtime.workers); rmSync(cwd, { recursive: true, force: true }); }
+});
